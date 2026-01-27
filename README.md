@@ -103,14 +103,11 @@ python main.py
 # Citing
 If you use the framework in a research project, please cite:
 ```sh
-@misc{berti2025tradesgeneratingrealisticmarket,
-      title={TRADES: Generating Realistic Market Simulations with Diffusion Models}, 
-      author={Leonardo Berti and Bardh Prenkaj and Paola Velardi},
-      year={2025},
-      eprint={2502.07071},
-      archivePrefix={arXiv},
-      primaryClass={q-fin.TR},
-      url={https://arxiv.org/abs/2502.07071}, 
+@article{berti2025trades,
+  title={TRADES: Generating Realistic Market Simulations with Diffusion Models},
+  author={Berti, Leonardo and Prenkaj, Bardh and Velardi, Paola},
+  journal={arXiv preprint arXiv:2502.07071},
+  year={2025}
 }
 ```
 
