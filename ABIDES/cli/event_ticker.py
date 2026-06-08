@@ -134,7 +134,7 @@ m.plot(grid=True, linewidth=LW, ax=ax)
 ax.fill_between(m.index, m-s, m+s, alpha=0.2)
 
 # Override prettier axis ticks...
-#ax.set_xticklabels(['T-30', 'T-20', 'T-10', 'T', 'T+10', 'T+20', 'T+30'])
+#ax.set_xticklabels(['T-30', 'T-20', 'T-10', 'min', 'T+10', 'T+20', 'T+30'])
 
 # Force y axis limits to match some other plot.
 #ax.set_ylim(-0.1, 0.5)
@@ -147,6 +147,6 @@ ax.set_ylabel('Baseline-Relative Price')
 
 #plt.savefig('background_{}.png'.format(b))
 
-#plt.show()
+#plt.close()  # headless: use savefig instead
 
 

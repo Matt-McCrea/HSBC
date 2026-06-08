@@ -22,21 +22,20 @@ def process_data(abides_log_folder, stock, date):
 
     # Transacted Orders
     ea_df = pd.read_pickle(abides_log_folder + 'EXCHANGE_AGENT.bz2')
-    ea_df = ea_df.loc[ea_df.EventType == 'ORDER_EXECUTED']
+    ea_df = ea_df.loc[ea_df.EventType == 3]
 
     transacted_orders_df = pd.DataFrame(columns=['TIMESTAMP', 'ORDER_ID', 'PRICE', 'SIZE', 'BUY_SELL_FLAG'])
 
-    i = 0
+    rows = []
     for index, row in ea_df.iterrows():
-        transacted_orders_df = transacted_orders_df.append(pd.Series(data={
+        rows.append({
             'TIMESTAMP': index,
             'ORDER_ID': row.Event['order_id'],
             'PRICE': row.Event['fill_price'],
             'SIZE': row.Event['quantity'],
             'BUY_SELL_FLAG': row.Event['is_buy_order']
-        }), ignore_index=True)
-        i += 1
-
+        })
+    transacted_orders_df = pd.DataFrame(rows)
     transacted_orders_df.set_index('TIMESTAMP', inplace=True)
 
     transacted_orders_df = transacted_orders_df.sort_values(by=['TIMESTAMP', 'ORDER_ID']).iloc[1::2]

@@ -8,7 +8,9 @@ from util.formatting.convert_order_book import process_orderbook, is_wide_book
 from util.formatting.convert_order_stream import convert_stream_to_format
 import itertools
 from bisect import bisect
-from matplotlib.cm import get_cmap
+import matplotlib
+matplotlib.use("Agg")  # headless backend
+from matplotlib import colormaps
 import os
 import warnings
 from util.util import get_value_from_timestamp
@@ -37,7 +39,7 @@ def get_trades(sim_file):
   df['SIZE'] = df['SIZE'].astype('float64')
 
   # New code for minutely resampling and renaming columns.
-  df = df[["PRICE","SIZE"]].resample("1T")
+  df = df[["PRICE","SIZE"]].resample("1min")
   df_open = df["PRICE"].first().ffill()
   df_close = df["PRICE"].last().ffill()
   df_high = df["PRICE"].max().ffill()
@@ -84,20 +86,18 @@ def augment_with_VWAP(merged):
     """ Method augments orderbook with volume weighted average price.
     """
 
-    merged = merged.reset_index()
-    executed_df = merged.loc[merged["TYPE"] == "ORDER_EXECUTED"]
+    original_index = merged.index
+    merged = merged.reset_index(drop=True)
+    executed_df = merged.loc[merged["TYPE"] == 3]
     executed_df = executed_df.dropna()
     vwap = (executed_df['PRICE'].multiply(executed_df['SIZE'])).cumsum() / executed_df['SIZE'].cumsum()
     vwap = vwap.to_frame(name='VWAP')
-    merged = pd.merge(merged.reset_index(), vwap, how='left', left_index=True, right_index=True)
-    merged['VWAP'] = merged['VWAP'].fillna(method='ffill')
-    merged['VWAP'] = merged['VWAP']
-    merged = merged.set_index('index')
-    merged = merged.drop(columns=['level_0'])
+    merged = pd.merge(merged, vwap, how='left', left_index=True, right_index=True)
+    merged['VWAP'] = merged['VWAP'].ffill()
+    merged.index = original_index
     merged.index.name = None
 
     return merged
-
 
 def make_orderbook_for_analysis(stream_path, orderbook_path, num_levels=5, ignore_cancellations=True, hide_liquidity_collapse=True):
     """  Make orderbook amenable to mid-price + liquidity plots from ABIDES input.
@@ -239,7 +239,7 @@ def get_execution_agent_vwap(experiment_name, agent_name, date, seed, pov, log_d
     file_path = f'{log_dir}/{experiment_name}_yes_{seed}_{pov}_{date}/{agent_name}.bz2'
     exec_df = pd.read_pickle(file_path)
 
-    executed_orders = exec_df.loc[exec_df['EventType'] == 'ORDER_EXECUTED']
+    executed_orders = exec_df.loc[exec_df['EventType'] == 3]
     executed_orders['PRICE'] = executed_orders['Event'].apply(lambda x: x['fill_price'])
     executed_orders['SIZE'] = executed_orders['Event'].apply(lambda x: x['quantity'])
 
@@ -306,7 +306,7 @@ def compute_impact_statistics(orderbook_df, orderbook_with_execution_df, start_t
 
 def get_plot_colors(symbols, start_idx=0):
     name = "Set1"
-    cmap = get_cmap(name)  # type: matplotlib.colors.ListedColormap
+    cmap = colormaps[name]  # type: matplotlib.colors.ListedColormap
     colors = cmap.colors  # type: list
     return colors[start_idx:(len(symbols) + start_idx)]
 
@@ -348,8 +348,8 @@ def forward_fill_series(s1, s2):
     missing_times_from_s2 = s1_out.index.difference(s2_out.index)
     missing_times_from_s1 = s2_out.index.difference(s1_out.index)
 
-    dummy_to_add_to_s1 = pd.Series([np.NaN] * missing_times_from_s1.size, index=missing_times_from_s1)
-    dummy_to_add_to_s2 = pd.Series([np.NaN] * missing_times_from_s2.size, index=missing_times_from_s2)
+    dummy_to_add_to_s1 = pd.Series([np.nan] * missing_times_from_s1.size, index=missing_times_from_s1)
+    dummy_to_add_to_s2 = pd.Series([np.nan] * missing_times_from_s2.size, index=missing_times_from_s2)
 
     s2_out = pd.concat([s2_out, dummy_to_add_to_s2])
     s1_out = pd.concat([s1_out, dummy_to_add_to_s1])

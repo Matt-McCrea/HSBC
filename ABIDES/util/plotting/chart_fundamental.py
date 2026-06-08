@@ -1,4 +1,6 @@
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")  # headless backend
 from matplotlib import pyplot as plt
 from matplotlib.dates import DateFormatter
 from dateutil.parser import parse
@@ -48,7 +50,7 @@ def plot_fundamental(fundamentals_df_list, legend_labels, plot_title, output_dir
 
     fig.savefig(f'{output_dir}/{Constants.filename}.png', format='png', dpi=300, transparent=False, bbox_inches='tight',
                 pad_inches=0.03)
-    #plt.show()
+    #plt.close()  # headless: use savefig instead
 
 
 def validate_input(fundamentals, legend_labels):

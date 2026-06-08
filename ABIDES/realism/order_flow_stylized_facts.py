@@ -6,6 +6,8 @@ import glob
 import re
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use("Agg")  # headless backend
 from realism_utils import get_plot_colors
 import numpy as np
 from scipy import stats
@@ -109,7 +111,7 @@ def bundled_stream_interarrival_times(bundled_streams):
         if symbol not in interarrivals_dict.keys():
             interarrivals_dict[symbol] = interarrival_times
         else:
-            interarrivals_dict[symbol] = interarrivals_dict[symbol].append(interarrival_times)
+            interarrivals_dict[symbol] = pd.concat([interarrivals_dict[symbol], interarrival_times])
 
         year_offset += 1
 
@@ -309,16 +311,15 @@ def plot_intraday_seasonality(trades_within_bins_dict, binsize, output_dir):
 
         x = []
         for elem in binned_trades.index:
-            x.append(elem.right.time())
+            x.append(elem.right.to_pydatetime())
 
         plt.scatter(x, y, marker=marker, color=color, label=symbol, s=marker_size)
         plt.plot(x, intraday_quadratic_fitted_y, color=color, label=f"{symbol} quadratic fit",
                  linewidth=Constants.intraday_volume_linewidth)
 
     plt.legend(fontsize=Constants.legend_font_size)
-    plt.title(f"Number of limit orders submitted in $\Delta t = {binsize}$ seconds, normalized by mean volume.", size=Constants.title_font_size, pad=20)
+    plt.title(rf"Number of limit orders submitted in $\Delta t = {binsize}$ seconds, normalized by mean volume.", size=Constants.title_font_size, pad=20)
 
-    ax.set_xticklabels(["", "09:45", "11:00", "12:30", "14:00", "15:15"])
     ax.set_ylim(-0.1, 3)
 
     fig.savefig(f'{output_dir}/{Constants.intraday_volume_filename}.png', format='png', dpi=300,

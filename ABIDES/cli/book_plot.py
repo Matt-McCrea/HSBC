@@ -239,7 +239,7 @@ if PLOT_HISTORICAL:
 
   df_hist = df_hist.between_time('9:30', '16:00')
   #df_hist = df_hist.between_time('10:00', '10:05')
-  df_hist = df_hist.resample('1S').last().ffill()
+  df_hist = df_hist.resample('1s').last().ffill()
 
   df = prepare_histogram(df_hist)
   df.index = df.index.time
@@ -255,5 +255,5 @@ if PLOT_HISTORICAL:
   plt.tight_layout()
 
 # Show all the plots.
-#plt.show()
+#plt.close()  # headless: use savefig instead
 

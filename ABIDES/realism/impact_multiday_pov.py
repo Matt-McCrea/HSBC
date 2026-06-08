@@ -5,6 +5,8 @@ import re
 from pprint import pprint
 import numpy as np
 import matplotlib.dates as mdates
+import matplotlib
+matplotlib.use("Agg")  # headless backend
 import matplotlib.pyplot as plt
 
 from impact_single_day_pov import prep_data

@@ -38,15 +38,17 @@ def read_simulated_quotes (file):
 
 sim_file = sys.argv[1]
 df_sim = read_simulated_quotes(sim_file)
-df_sim = df_sim.drop(["EventType.bid", "Event.bid", "EventType.ask", "Event.ask"], axis=1).resample("1T").ffill()
+df_sim = df_sim.drop(["EventType.bid", "Event.bid", "EventType.ask", "Event.ask"], axis=1).resample("1min").ffill()
 df_sim.to_csv("simulated_quotes.csv")
 
 '''
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use("Agg")  # headless backend
 plt.plot(df_sim["BEST_BID"], color="g")
 plt.plot(df_sim["BEST_ASK"], color="r")
-#plt.show()
+#plt.close()  # headless: use savefig instead
 
 plt.plot(df_sim["BEST_ASK"]-df_sim["BEST_BID"])
-#plt.show()
+#plt.close()  # headless: use savefig instead
 '''

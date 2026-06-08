@@ -11,7 +11,7 @@ def load_and_compute_log_returns(file_path):
         df = pd.read_csv(f)
     df.rename(columns={'Unnamed: 0': 'time'}, inplace=True)
     df['time'] = pd.to_datetime(df['time'])
-    df['minute'] = df['time'].dt.floor('T')
+    df['minute'] = df['time'].dt.floor('min')
     df = df.query("ask_price_1 < 9999999")
     df = df.query("bid_price_1 < 9999999")
     df = df.query("ask_price_1 > -9999999")
@@ -24,7 +24,7 @@ def load_and_compute_log_returns(file_path):
 def load_and_compute_volatility(df, i):
     df.rename(columns={'Unnamed: 0': 'time'}, inplace=True)
     df['time'] = pd.to_datetime(df['time'])
-    df['minute'] = df['time'].dt.floor('T')
+    df['minute'] = df['time'].dt.floor('min')
     df['second'] = df['time'].dt.second
     df = df.query("ask_price_1 < 9999999")
     df = df.query("bid_price_1 < 9999999")
@@ -40,7 +40,7 @@ def load_and_compute_volatility(df, i):
 def load_and_compute_volume(df, i):
     df.rename(columns={'Unnamed: 0': 'time'}, inplace=True)
     df['time'] = pd.to_datetime(df['time'])
-    df['minute'] = df['time'].dt.floor('T')
+    df['minute'] = df['time'].dt.floor('min')
     df['second'] = df['time'].dt.second
     df = df.query("ask_price_1 < 9999999")
     df = df.query("bid_price_1 < 9999999")
@@ -54,7 +54,7 @@ def load_and_compute_volume(df, i):
 def load_and_compute_returns(df, i):
     df.rename(columns={'Unnamed: 0': 'time'}, inplace=True)
     df['time'] = pd.to_datetime(df['time'])
-    df['minute'] = df['time'].dt.floor('T')
+    df['minute'] = df['time'].dt.floor('min')
     df['second'] = df['time'].dt.second
     df = df.query("ask_price_1 < 9999999")
     df = df.query("bid_price_1 < 9999999")

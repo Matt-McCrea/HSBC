@@ -1,5 +1,7 @@
 from metrics.metric import Metric
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use("Agg")  # headless backend
 import numpy as np
 
 

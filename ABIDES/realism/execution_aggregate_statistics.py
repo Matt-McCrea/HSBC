@@ -37,7 +37,7 @@ def main(path_glob, out_filepath):
             impact_stats.append(stats_dict)
 
     stats_df_aggregate = pd.DataFrame(impact_stats)
-    median = stats_df_aggregate.groupby(['pov']).apply(pd.DataFrame.median).drop(columns=['pov'])
+    median = stats_df_aggregate.groupby(['pov']).apply(pd.DataFrame.median).drop(columns=['pov'], errors='ignore')
     print(f'Aggregated statistics (median) for glob {path_glob}:')
     print(median)
     median.to_csv(out_filepath, index=True)

@@ -7,7 +7,7 @@ class AggregationNormality(Metric):
         self.mr = MinutelyReturns()
 
     def compute(self, df):
-        df = df[["close"]].resample("10T").last()
+        df = df[["close"]].resample("10min").last()
         return self.mr.compute(df)
 
     def visualize(self, simulated):

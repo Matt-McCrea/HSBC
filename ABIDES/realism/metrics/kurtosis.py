@@ -12,7 +12,7 @@ class Kurtosis(Metric):
     def compute(self, df):
         ks = []
         for i in range(1,self.intervals+1):
-            temp = df[["close"]].resample("{}T".format(i)).last()
+            temp = df[["close"]].resample("{}min".format(i)).last()
             rets = self.mr.compute(temp)
             ks.append(kurtosis(rets))
         return [ks]

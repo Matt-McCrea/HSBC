@@ -184,7 +184,7 @@ ax.axvline(x=200, color='0.5', linestyle='--', linewidth=2, label="Order placeme
   
 # Absolute or relative time labels...
 ax.set_xticklabels(['0','10000','20000','30000','40000','50000','60000','70000'])
-#ax.set_xticklabels(['T-30', 'T-20', 'T-10', 'T', 'T+10', 'T+20', 'T+30'])
+#ax.set_xticklabels(['T-30', 'T-20', 'T-10', 'min', 'T+10', 'T+20', 'T+30'])
 
 ax.legend(legend)
 #ax.legend()
@@ -204,5 +204,5 @@ ax.set_ylabel('Baseline-Relative Price', fontsize=12, fontweight='bold')
 #plt.savefig('abides_multi_buy.png')
 #plt.savefig('abides_multi_sell.png')
   
-#plt.show()
+#plt.close()  # headless: use savefig instead
   

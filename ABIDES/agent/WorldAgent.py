@@ -837,7 +837,9 @@ class WorldAgent(Agent):
             for j in range(len(dataframes[i][1])-256):
                 order_sign_imbalance_256.iloc[j] = dataframes[i][0]["direction"].iloc[j:j+256].sum()
                 order_sign_imbalance_128.iloc[j] = dataframes[i][0]["direction"].iloc[j+128:j+256].sum()
+                returns_1 = returns_1.astype(float)
                 returns_1.iloc[j] = mid_prices[j+255] / mid_prices[j+254] - 1
+                returns_50 = returns_50.astype(float)
                 returns_50.iloc[j] = mid_prices[j+255] / mid_prices[j+205] - 1
             dataframes[i][1] = dataframes[i][1].iloc[255:]
             dataframes[i][1].loc[:, "order_sign_imbalance_256"] = order_sign_imbalance_256.iloc[:-255] / 256

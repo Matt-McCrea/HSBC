@@ -70,7 +70,7 @@ def convert_stream_to_format(stream_df, fmt="LOBSTER"):
 
     if fmt == "plot-scripts":
 
-        lobster_df["Type"].replace(reversed_market_events, inplace=True)
+        lobster_df["Type"] = lobster_df["Type"].replace(reversed_market_events)
         lobster_df.rename(columns={'Type': "TYPE"}, inplace=True)
         lobster_df = lobster_df.sort_values(by=['TIMESTAMP'])
         lobster_df = lobster_df[['TIMESTAMP', 'ORDER_ID', 'PRICE', 'SIZE', 'BUY_SELL_FLAG', 'TYPE']]

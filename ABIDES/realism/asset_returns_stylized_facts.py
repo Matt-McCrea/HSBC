@@ -5,6 +5,8 @@ import pickle
 import math
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use("Agg")  # headless backend
 import numpy as np
 from realism_utils import get_trades
 from glob import glob

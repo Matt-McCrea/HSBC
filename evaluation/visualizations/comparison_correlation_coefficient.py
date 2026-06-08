@@ -9,7 +9,7 @@ def main(real_path, TRADES_path, iabs_path, cgan_path):
         df = pd.read_csv(file_path)
         df.rename(columns={'Unnamed: 0': 'time'}, inplace=True)
         df['time'] = pd.to_datetime(df['time'])
-        df['minute'] = df['time'].dt.floor('T')
+        df['minute'] = df['time'].dt.floor('min')
         df = df.query("ask_price_1 < 9999999")
         df = df.query("bid_price_1 < 9999999")
         df = df.query("ask_price_1 > -9999999")

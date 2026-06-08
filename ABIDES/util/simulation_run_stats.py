@@ -5,6 +5,8 @@ from glob import glob
 import re
 import os
 from IPython.display import display, HTML
+import matplotlib
+matplotlib.use("Agg")  # headless backend
 from matplotlib import pyplot as plt
 
 """
@@ -128,7 +130,7 @@ if __name__ == '__main__':
         plt.title(col)
         plt.xlabel('num_agents')
         plt.ylabel(col)
-        #plt.show()
+        #plt.close()  # headless: use savefig instead
         fig.savefig(f'timings-plots/{col}.png', format='png', dpi=300, transparent=False, bbox_inches='tight',
                     pad_inches=0.03)
 

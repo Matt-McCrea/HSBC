@@ -16,7 +16,7 @@ def plot_avg_diff_and_std(days_paths_wo_exp, days_paths_w_exp):
 
         df_wo_exp.rename(columns={'Unnamed: 0': 'time'}, inplace=True)
         df_wo_exp['time'] = pd.to_datetime(df_wo_exp['time'])
-        df_wo_exp['minute'] = df_wo_exp['time'].dt.floor('T')
+        df_wo_exp['minute'] = df_wo_exp['time'].dt.floor('min')
         df_wo_exp['second'] = df_wo_exp['time'].dt.second
         #compute the average mid price for each second
         df_wo_exp = df_wo_exp.query("ask_price_1 < 9999999")
@@ -27,7 +27,7 @@ def plot_avg_diff_and_std(days_paths_wo_exp, days_paths_w_exp):
         
         df_w_exp.rename(columns={'Unnamed: 0': 'time'}, inplace=True)
         df_w_exp['time'] = pd.to_datetime(df_w_exp['time'])
-        df_w_exp['minute'] = df_w_exp['time'].dt.floor('T')
+        df_w_exp['minute'] = df_w_exp['time'].dt.floor('min')
         df_w_exp['second'] = df_w_exp['time'].dt.second
         df_w_exp = df_w_exp.query("ask_price_1 < 9999999")
         df_w_exp = df_w_exp.query("bid_price_1 < 9999999")

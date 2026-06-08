@@ -1,4 +1,6 @@
+# ===== Original DeepMarket rules (kept) =====
 __pycache__
+*.pyc
 data/reconstructions
 data/TSLA
 data/INTC/INTC_*
@@ -18,3 +20,27 @@ output
 launch.sh
 env
 launch_sim.sh
+
+# ===== Added for collaboration =====
+# Python virtual environments (machine-specific, large — never commit)
+dmenv/
+venv/
+.venv/
+*.egg-info/
+.ipynb_checkpoints/
+
+# Backup files from the sed edits
+*.bak
+*.bak2
+
+# Regenerable outputs / caches
+cache/
+visualizations/
+# (delete the line above if you actually want to share the generated plots)
+
+# Stray files from earlier mishaps
+/-o
+/-s
+
+# macOS clutter
+.DS_Store

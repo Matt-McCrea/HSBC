@@ -266,7 +266,10 @@ if args.diffusion:
                           )
                ])
     elif config.CHOSEN_MODEL == cst.Models.CGAN:
-        model = GANEngine.load_from_checkpoint(checkpoint_reference, config=config, map_location=cst.DEVICE)
+        import torch.serialization
+        from configuration import Configuration
+        torch.serialization.add_safe_globals([Configuration])
+        model = GANEngine.load_from_checkpoint(checkpoint_reference, config=config, map_location=cst.DEVICE, weights_only=False)
         agents.extend([WorldAgent(id=1,
                           name="WORLD_AGENT",
                           type="WorldAgent",

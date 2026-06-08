@@ -14,7 +14,7 @@ def create_orderbooks(exchange_path, ob_path):
                                                       hide_liquidity_collapse=False)
     cleaned_orderbook = processed_orderbook[(processed_orderbook['MID_PRICE'] > - MID_PRICE_CUTOFF) &
                                             (processed_orderbook['MID_PRICE'] < MID_PRICE_CUTOFF)]
-    transacted_orders = cleaned_orderbook.loc[cleaned_orderbook.TYPE == "ORDER_EXECUTED"]
+    transacted_orders = cleaned_orderbook.loc[cleaned_orderbook.TYPE == 3]
 
     transacted_orders = transacted_orders.reset_index()
     transacted_orders = transacted_orders.sort_values(by=['index', 'ORDER_ID']).iloc[1::2]

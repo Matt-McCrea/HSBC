@@ -8,6 +8,8 @@ print(os.getcwd())
 from realism.realism_utils import make_orderbook_for_analysis, MID_PRICE_CUTOFF
 from matplotlib import pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib
+matplotlib.use("Agg")  # headless backend
 import numpy as np
 from datetime import timedelta, datetime
 import argparse
@@ -49,7 +51,7 @@ def create_orderbooks(exchange_path, ob_path):
 
     cleaned_orderbook = processed_orderbook[(processed_orderbook['MID_PRICE'] > - MID_PRICE_CUTOFF) &
                                             (processed_orderbook['MID_PRICE'] < MID_PRICE_CUTOFF)]
-    transacted_orders = cleaned_orderbook.loc[cleaned_orderbook.TYPE == "ORDER_EXECUTED"]
+    transacted_orders = cleaned_orderbook.loc[cleaned_orderbook.TYPE == 3]
     transacted_orders['SIZE'] = transacted_orders['SIZE'] / 2
 
     return processed_orderbook, transacted_orders, cleaned_orderbook
@@ -63,6 +65,8 @@ def bin_and_sum(s, binwidth):
         :param binwidth: width of time bins in seconds
         :type binwidth: float
     """
+    if len(s) == 0:
+        return pd.Series(dtype=float)
     bins = pd.interval_range(start=s.index[0].floor('min'), end=s.index[-1].ceil('min'),
                              freq=pd.DateOffset(seconds=binwidth))
     binned = pd.cut(s.index, bins=bins)
@@ -123,6 +127,9 @@ def print_liquidity_stats(transacted_orders, no_bid_idx, no_ask_idx, liquidity_d
     sys.stderr.write(f'TOTAL_LIQUIDITY_DROPOUTS: {total_liquidity_dropouts}\n')
 
     #  liquidity droput events within buffer
+    if len(transacted_orders) == 0:
+        print("Warning: no transacted orders found, skipping liquidity telemetry plot")
+        return
     start_buffer = transacted_orders.index[0] + pd.Timedelta(seconds=liquidity_dropout_buffer)
     end_buffer = transacted_orders.index[-1] - pd.Timedelta(seconds=liquidity_dropout_buffer)
 

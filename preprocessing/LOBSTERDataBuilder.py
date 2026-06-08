@@ -146,7 +146,8 @@ class LOBSTERDataBuilder:
         # divide all the price, both of lob and messages, by 100
         for i in range(len(self.dataframes)):
             self.dataframes[i][0]["price"] = self.dataframes[i][0]["price"] / 100
-            self.dataframes[i][1].loc[:, ::2] /= 100
+            self.dataframes[i][1] = self.dataframes[i][1].astype(float)
+            self.dataframes[i][1].loc[:, ::2] = 100
 
         #apply z score to orderbooks
         for i in range(len(self.dataframes)):

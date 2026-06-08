@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use("Agg")  # headless backend
 from datetime import datetime, time
 import itertools
 import pickle
@@ -151,9 +153,9 @@ def prep_data(plot_data, cache_file, only_executed, clipped_start_time, clipped_
                                                                     num_levels=1)
 
         if only_executed:
-            abides_orderbook_df = abides_orderbook_df.loc[abides_orderbook_df["TYPE"] == "ORDER_EXECUTED"]
+            abides_orderbook_df = abides_orderbook_df.loc[abides_orderbook_df["TYPE"] == 3]
             abides_execution_orderbook_df = abides_execution_orderbook_df.loc[
-                abides_execution_orderbook_df["TYPE"] == "ORDER_EXECUTED"]
+                abides_execution_orderbook_df["TYPE"] == 3]
 
         historical_date = pd.Timestamp(abides_orderbook_df.index[0].date())
         start = historical_date + pd.to_timedelta(clipped_start_time)

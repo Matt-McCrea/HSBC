@@ -159,5 +159,5 @@ axes[0].set_xlabel('Quote Time')
 
 #plt.savefig('background_{}.png'.format(b))
 
-#plt.show()
+#plt.close()  # headless: use savefig instead
 

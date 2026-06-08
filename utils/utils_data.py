@@ -210,7 +210,8 @@ def load_compute_normalization_terms(stock_name, data_dir, model, n_lob_levels):
                         train_messages = pd.concat([train_messages, train_message], axis=0)
                         train_orderbooks = pd.concat([train_orderbooks, train_orderbook], axis=0)
     if model == cst.Models.TRADES:
-        train_orderbooks.loc[:, ::2] /= 100
+        train_orderbooks = train_orderbooks.astype(float)
+        train_orderbooks.loc[:, ::2] = 100
         train_messages["price"] /= 100
         _, lob_mean_size, lob_mean_prices, lob_std_size, lob_std_prices = z_score_orderbook(train_orderbooks)
         _, mean_size, mean_prices, std_size,  std_prices, mean_time, std_time, mean_depth, std_depth = normalize_messages(train_messages)
@@ -307,7 +308,7 @@ def preprocess_data(dataframes, n_lob_levels, chosen_model):
 
         # Calculate cancel_depth using vectorization
         cancel_mask = dataframes[0]["event_type"] == 3
-        shifted_prices = dataframes[1].shift(1).fillna(method='bfill')
+        shifted_prices = dataframes[1].shift(1).bfill()
         price_levels = shifted_prices.iloc[:, ::2].apply(lambda row: dict(zip(row, range(0, len(row)*2, 2))), axis=1)
         dataframes[0].loc[cancel_mask, "cancel_depth"] = dataframes[0].loc[cancel_mask].apply(
             lambda row: price_levels[row.name].get(row["price"], np.nan) // 2, axis=1
