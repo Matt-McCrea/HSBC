@@ -75,9 +75,14 @@ If you aim to train a TRADES model or implement your model, you should follow th
 
 ## Data 
 1. Firstly, you need to have some LOBSTER data, otherwise, it would be impossible to train a new model. The format of the data should be the same as LOBSTER: f"{year}-{month}-{day}_34200000_57600000_{type}" and the data should be saved in f"data/{stock_name}/{stock_name}_{year}-{start_month}-{start_day}_{year}-{end_month}-{end_day}". The type can be "message" or "orderbook".
+1. **Make sure to change the dates in constants. The splits in config and constants. The chosen stock in config. If adding a stock add it to constants stocks class, alongside prefixed version of all stats seen below.**
 2. You need to add the new stock to the constants and to the config file.
 3. You need to change cst.DATE_TRAINING_DAYS setting the start day and end day
 4. You need to start the preprocessing setting. To do so, set config.IS_DATA_PREPROCESSED to False and run python main.py
+
+Note that for small runs there is a guard for standard deviation, if 0, becomes 1. Make sure on large runs this is not tripped and identify root cause. 
+
+Number of workers has been reduced from 4 to 2 to allow Colab to work. 
 
 ## Implementing and Training a new model 
 To train a new model, follow these steps:

@@ -100,7 +100,10 @@ def z_score_orderbook(data, mean_size=None, mean_prices=None, std_size=None, std
     if (mean_prices is None) or (std_prices is None):
         mean_prices = data.iloc[:, 0::2].stack().mean()
         std_prices = data.iloc[:, 0::2].stack().std()
-
+    if std_size == 0 or pd.isna(std_size):
+        std_size = 1.0
+    if std_prices == 0 or pd.isna(std_prices):
+        std_prices = 1.0
     # apply the z score to the original data using .loc with explicit float cast
     price_cols = data.columns[0::2]
     size_cols = data.columns[1::2]

@@ -66,7 +66,7 @@ def train(config: Configuration, trainer: L.Trainer):
         val_set=val_set,
         batch_size=config.HYPER_PARAMETERS[cst.LearningHyperParameter.BATCH_SIZE],
         test_batch_size=config.HYPER_PARAMETERS[cst.LearningHyperParameter.TEST_BATCH_SIZE],
-        num_workers=4
+        num_workers=2
     )
     if config.CHOSEN_MODEL == cst.Models.CGAN:
         model = GANEngine(config)
