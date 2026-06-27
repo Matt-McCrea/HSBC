@@ -168,7 +168,7 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
             noise_t, v = self.deaugment(noise_t, v)
         # Compute the variance for the current time step using the formula from the IDDPM paper
         
-        frac = (v + 1) / 2
+        frac = torch.clamp((v + 1) / 2, 0.0, 1.0)
         max_log = torch.log(beta_t)
         min_log = self.posterior_log_var_clipped[t]
         min_log = repeat(min_log, 'b -> b l d', l=self.gen_seq_size, d=x_0.shape[-1])
@@ -204,7 +204,7 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
             alpha_cumprod_t=alpha_cumprod_t,
             clip_denoised=False,
             weights=weights
-        )#.clamp(max=100)
+        ).clamp(max=100)
         #check if there are nan in L_vlb
         if torch.isnan(L_vlb).any():
             print("L_vlb:", L_vlb.max())
