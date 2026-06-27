@@ -57,18 +57,18 @@ class Configuration:
         self.HYPER_PARAMETERS[LearningHyperParameter.SEQ_SIZE] = 256        #it's the sequencce length
         self.HYPER_PARAMETERS[LearningHyperParameter.MASKED_SEQ_SIZE] = 1      #it's the number of elements to be gen, so the events that we generate at a time
 
-        self.HYPER_PARAMETERS[LearningHyperParameter.CONDITIONAL_DROPOUT] = 0.0
+        self.HYPER_PARAMETERS[LearningHyperParameter.CONDITIONAL_DROPOUT] = 0.1
         self.HYPER_PARAMETERS[LearningHyperParameter.DROPOUT] = 0.1
         self.HYPER_PARAMETERS[LearningHyperParameter.NUM_DIFFUSIONSTEPS] = 100
         self.HYPER_PARAMETERS[LearningHyperParameter.SIZE_TYPE_EMB] = 3
         self.HYPER_PARAMETERS[LearningHyperParameter.SIZE_ORDER_EMB] = cst.LEN_ORDER + self.HYPER_PARAMETERS[LearningHyperParameter.SIZE_TYPE_EMB] - 1
         
-        self.HYPER_PARAMETERS[LearningHyperParameter.LAMBDA] = 0.01       #its the parameter used in the loss function to prevent L_vlb from overwhleming L_simple
+        self.HYPER_PARAMETERS[LearningHyperParameter.LAMBDA] = 0.1        #its the parameter used in the loss function to prevent L_vlb from overwhleming L_simple
         self.HYPER_PARAMETERS[LearningHyperParameter.P_NORM] = 2 if self.CHOSEN_STOCK == cst.Stocks.INTC else 5
         self.HYPER_PARAMETERS[LearningHyperParameter.REG_TERM_WEIGHT] = 1
         self.HYPER_PARAMETERS[LearningHyperParameter.CDT_DEPTH] = 8
         self.HYPER_PARAMETERS[LearningHyperParameter.CDT_MLP_RATIO] = 4
-        self.HYPER_PARAMETERS[LearningHyperParameter.CDT_NUM_HEADS] = 1
+        self.HYPER_PARAMETERS[LearningHyperParameter.CDT_NUM_HEADS] = 4
 
         self.BETAS = noise_scheduler(num_diffusion_timesteps=self.HYPER_PARAMETERS[cst.LearningHyperParameter.NUM_DIFFUSIONSTEPS])
 

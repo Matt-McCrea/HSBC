@@ -219,13 +219,8 @@ class DiffusionEngine(LightningModule):
 
         # model checkpointing
         if loss_ema < self.min_loss_ema:
-            # if the improvement is less than 0.01, we halve the learning rate
-            if loss_ema - self.min_loss_ema > -0.002:
-                self.optimizer.param_groups[0]["lr"] /= 2  
             self.min_loss_ema = loss_ema
             self.model_checkpointing(loss_ema)
-        else:
-            self.optimizer.param_groups[0]["lr"] /= 2
 
         if isinstance(self.diffuser, GaussianDiffusion):
             L_simple = sum(self.simple_val_losses) / len(self.simple_val_losses)
@@ -246,16 +241,28 @@ class DiffusionEngine(LightningModule):
                 [
                     {'params': self.diffuser.parameters()},
                     {'params': self.type_embedder.parameters(), "lr": 0.01},
-                ], 
-                lr=self.lr
-                )
+                ],
+                lr=self.lr,
+                weight_decay=1e-4,
+            )
         elif self.optimizer == 'RMSprop':
             self.optimizer = torch.optim.RMSprop(self.parameters(), lr=self.lr)
         elif self.optimizer == 'SGD':
             self.optimizer = torch.optim.SGD(self.parameters(), lr=self.lr, momentum=0.9)
         elif self.optimizer == 'LION':
             self.optimizer = Lion(self.parameters(), lr=self.lr)
-        return self.optimizer
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer, mode='min', patience=5, factor=0.5, threshold=0.01
+        )
+        return {
+            "optimizer": self.optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "monitor": "val_ema_loss",
+                "interval": "epoch",
+                "frequency": 1,
+            },
+        }
 
     def _define_log_metrics(self):
         wandb.define_metric("val_loss", summary="min")
