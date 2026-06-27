@@ -211,7 +211,7 @@ def main(real_data_path, generated_data_path):
     labels_g = df_g['MID_PRICE'].values
 
     # Split the data into training and test sets
-    train_X_g, test_X_g, train_y_g, test_y_g = train_test_split(features_g, labels_g, test_size=2, random_state=42)
+    train_X_g, test_X_g, train_y_g, test_y_g = train_test_split(features_g, labels_g, test_size=0.2, random_state=42)
     train_X_g = np.concatenate([train_X_g[:, :7], train_X_g[:, -4:]], axis=1)
     # Convert to PyTorch tensors
     train_X_g = torch.tensor(train_X_g, dtype=torch.float32).to(device, non_blocking=True)
