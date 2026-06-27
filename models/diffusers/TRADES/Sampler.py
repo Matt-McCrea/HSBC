@@ -47,15 +47,20 @@ class LossSecondMomentResampler(ScheduleSampler):
         self.history_per_term = history_per_term
         self.uniform_prob = uniform_prob
         self._loss_history = np.zeros(
-            [num_diffusionsteps, history_per_term], dtype=np.float32
+            [num_diffusionsteps, history_per_term], dtype=np.float64
         )
         self._loss_counts = np.zeros([num_diffusionsteps], dtype=np.int32)
 
     def weights(self):
         if not self._warmed_up():
-            return np.ones([self.num_diffusionsteps], dtype=np.float32)
+            return np.ones([self.num_diffusionsteps], dtype=np.float64)
         weights = np.sqrt(np.mean(self._loss_history ** 2, axis=-1))
-        weights /= np.sum(weights)
+        weights = np.nan_to_num(weights, nan=1.0, posinf=1.0)
+        total = np.sum(weights)
+        if total == 0:
+            weights = np.ones(self.num_diffusionsteps, dtype=np.float64)
+            total = float(self.num_diffusionsteps)
+        weights /= total
         weights *= 1 - self.uniform_prob
         weights += self.uniform_prob / len(weights)
         return weights
@@ -64,6 +69,8 @@ class LossSecondMomentResampler(ScheduleSampler):
         for i in range(len(losses)):
             t = ts[i].item()
             loss = losses[i].item()
+            if not np.isfinite(loss):
+                continue
             if self._loss_counts[t] == self.history_per_term:
                 # Shift out the oldest loss term.
                 self._loss_history[t, :-1] = self._loss_history[t, 1:]
