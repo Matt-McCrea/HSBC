@@ -8,6 +8,7 @@ import configuration
 import warnings
 from preprocessing.LOBSTERDataBuilder import LOBSTERDataBuilder
 import evaluation.quantitative_eval.predictive_lstm as predictive_lstm
+import evaluation.quantitative_eval.kl_divergence as kl_divergence
 import evaluation.visualizations.comparison_distribution_order_type as comparison_distribution_order_type
 import evaluation.visualizations.comparison_distribution_market_spread as comparison_distribution_market_spread
 import evaluation.visualizations.PCA_plots as PCA_plots
@@ -84,6 +85,8 @@ if __name__ == "__main__":
     elif config.IS_EVALUATION:
         plot_graphs(config.REAL_DATA_PATH, config.TRADES_DATA_PATH, config.IABS_DATA_PATH, config.CGAN_DATA_PATH)
         predictive_lstm.main(config.REAL_DATA_PATH, config.TRADES_DATA_PATH)
+        if config.REAL_DATA_PATH and config.TRADES_DATA_PATH:
+            kl_divergence.compute_distribution_distances(config.REAL_DATA_PATH, config.TRADES_DATA_PATH)
         
 
         

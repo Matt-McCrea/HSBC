@@ -1,3 +1,4 @@
+import json
 import pandas as pd
 import numpy as np
 import os
@@ -164,6 +165,31 @@ def normalize_messages(data, mean_size=None, mean_prices=None, std_size=None,  s
 
 
 def load_compute_normalization_terms(stock_name, data_dir, model, n_lob_levels):
+    """Return normalization stats for WorldAgent/simulation.
+
+    Tries the cached JSON written by preprocessing first (fast path).
+    Falls back to recomputing from raw LOBSTER CSVs if the JSON is absent.
+    """
+    if model == cst.Models.TRADES:
+        stats_path = os.path.join(data_dir, stock_name, "normalization_stats.json")
+        if os.path.exists(stats_path):
+            with open(stats_path) as f:
+                s = json.load(f)
+            lob = s["lob"]
+            evt = s["event"]
+            print(f"[utils_data] Loaded normalization stats from {stats_path}")
+            return {
+                "lob":   (lob["mean_size"], lob["std_size"], lob["mean_price"], lob["std_price"]),
+                "event": (evt["mean_size"], evt["std_size"], evt["mean_price"], evt["std_price"],
+                          evt["mean_time"], evt["std_time"], evt["mean_depth"], evt["std_depth"]),
+            }
+        print(f"[utils_data] normalization_stats.json not found for {stock_name}; recomputing from raw data")
+
+    # original slow path: read raw CSVs and recompute
+    return _load_compute_normalization_terms_slow(stock_name, data_dir, model, n_lob_levels)
+
+
+def _load_compute_normalization_terms_slow(stock_name, data_dir, model, n_lob_levels):
     path = "{}/{}/{}_{}_{}".format(
             data_dir,
             stock_name,

@@ -7,7 +7,9 @@
 # - 1     (Optional) POV Execution agent
 
 import argparse
+import json
 import numpy as np
+import os
 import pandas as pd
 import sys
 import datetime as dt
@@ -164,49 +166,50 @@ lambda_a = 7e-11
 
 # Oracle
 
-if symbol == "TSLA":
-    normalization_terms = {
-        "lob": [
-            cst.TSLA_LOB_MEAN_SIZE_10,
-            cst.TSLA_LOB_STD_SIZE_10,
-            cst.TSLA_LOB_MEAN_PRICE_10,
-            cst.TSLA_LOB_STD_PRICE_10,
-        ],
-        "event": [
-            cst.TSLA_EVENT_MEAN_SIZE,
-            cst.TSLA_EVENT_STD_SIZE,
-            cst.TSLA_EVENT_MEAN_PRICE,
-            cst.TSLA_EVENT_STD_PRICE,
-            cst.TSLA_EVENT_MEAN_TIME,
-            cst.TSLA_EVENT_STD_TIME,
-            cst.TSLA_EVENT_MEAN_DEPTH,
-            cst.TSLA_EVENT_STD_DEPTH,
-        ]
-    }
-    r_bar = cst.TSLA_EVENT_MEAN_PRICE*100
-    sigma_n = cst.TSLA_EVENT_STD_PRICE*100
+def _load_normalization_terms(symbol):
+    """Load from preprocessing-generated JSON; fall back to hardcoded constants."""
+    stats_path = os.path.join(cst.DATA_DIR, symbol, "normalization_stats.json")
+    if os.path.exists(stats_path):
+        with open(stats_path) as f:
+            s = json.load(f)
+        lob = s["lob"]
+        evt = s["event"]
+        normalization_terms = {
+            "lob":   [lob["mean_size"], lob["std_size"], lob["mean_price"], lob["std_price"]],
+            "event": [evt["mean_size"], evt["std_size"], evt["mean_price"], evt["std_price"],
+                      evt["mean_time"], evt["std_time"], evt["mean_depth"], evt["std_depth"]],
+        }
+        r_bar   = evt["mean_price"] * 100
+        sigma_n = evt["std_price"]  * 100
+        print(f"[rmsc03] Loaded normalization stats from {stats_path}")
+        return normalization_terms, r_bar, sigma_n
 
-elif symbol == "INTC":
-    normalization_terms = {
-        "lob": [
-            cst.INTC_LOB_MEAN_SIZE_10, 
-            cst.INTC_LOB_STD_SIZE_10, 
-            cst.INTC_LOB_MEAN_PRICE_10,
-            cst.INTC_LOB_STD_PRICE_10
-            ],
-        "event": [
-            cst.INTC_EVENT_MEAN_SIZE, 
-            cst.INTC_EVENT_STD_SIZE, 
-            cst.INTC_EVENT_MEAN_PRICE, 
-            cst.INTC_EVENT_STD_PRICE, 
-            cst.INTC_EVENT_MEAN_TIME, 
-            cst.INTC_EVENT_STD_TIME,
-            cst.INTC_EVENT_MEAN_DEPTH,
-            cst.INTC_EVENT_STD_DEPTH
-        ]
-    }
-    r_bar = cst.INTC_EVENT_MEAN_PRICE*100
-    sigma_n = cst.INTC_EVENT_STD_PRICE*100
+    # Fallback: hardcoded values (deprecated — run preprocessing to generate JSON)
+    print(f"[rmsc03] WARNING: normalization_stats.json not found for {symbol}; using hardcoded fallback")
+    if symbol == "TSLA":
+        normalization_terms = {
+            "lob":   [cst.TSLA_LOB_MEAN_SIZE_10, cst.TSLA_LOB_STD_SIZE_10,
+                      cst.TSLA_LOB_MEAN_PRICE_10, cst.TSLA_LOB_STD_PRICE_10],
+            "event": [cst.TSLA_EVENT_MEAN_SIZE, cst.TSLA_EVENT_STD_SIZE,
+                      cst.TSLA_EVENT_MEAN_PRICE, cst.TSLA_EVENT_STD_PRICE,
+                      cst.TSLA_EVENT_MEAN_TIME, cst.TSLA_EVENT_STD_TIME,
+                      cst.TSLA_EVENT_MEAN_DEPTH, cst.TSLA_EVENT_STD_DEPTH],
+        }
+        return normalization_terms, cst.TSLA_EVENT_MEAN_PRICE * 100, cst.TSLA_EVENT_STD_PRICE * 100
+    elif symbol == "INTC":
+        normalization_terms = {
+            "lob":   [cst.INTC_LOB_MEAN_SIZE_10, cst.INTC_LOB_STD_SIZE_10,
+                      cst.INTC_LOB_MEAN_PRICE_10, cst.INTC_LOB_STD_PRICE_10],
+            "event": [cst.INTC_EVENT_MEAN_SIZE, cst.INTC_EVENT_STD_SIZE,
+                      cst.INTC_EVENT_MEAN_PRICE, cst.INTC_EVENT_STD_PRICE,
+                      cst.INTC_EVENT_MEAN_TIME, cst.INTC_EVENT_STD_TIME,
+                      cst.INTC_EVENT_MEAN_DEPTH, cst.INTC_EVENT_STD_DEPTH],
+        }
+        return normalization_terms, cst.INTC_EVENT_MEAN_PRICE * 100, cst.INTC_EVENT_STD_PRICE * 100
+    else:
+        raise ValueError(f"No normalization stats available for symbol {symbol}. Run preprocessing first.")
+
+normalization_terms, r_bar, sigma_n = _load_normalization_terms(symbol)
 
 symbols = {symbol: {'r_bar': r_bar,
                     'kappa': 1.67e-16,

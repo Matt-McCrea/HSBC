@@ -1,5 +1,6 @@
 import argparse
 from datetime import datetime
+import os
 import time
 import warnings
 
@@ -110,6 +111,10 @@ parser.add_argument('-nsteps',
                     type=int,
                     default=1,
                     help='nsteps for DDIM')
+parser.add_argument('--real-data-path',
+                    type=str,
+                    default=None,
+                    help='Path to real market-replay processed_orders.csv for KL divergence report')
 
 args, remaining_args = parser.parse_known_args()
 
@@ -385,3 +390,17 @@ kernel.runner(agents=agents,
 simulation_end_time = dt.datetime.now()
 print("Simulation End Time: {}".format(simulation_end_time))
 print("Time taken to run simulation: {}".format(simulation_end_time - simulation_start_time))
+
+# KL divergence report: compare generated orders to real data
+if args.real_data_path:
+    generated_csv = os.path.join("ABIDES", "log", log_dir, "processed_orders.csv")
+    if os.path.exists(generated_csv):
+        try:
+            import sys as _sys
+            _sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+            from evaluation.quantitative_eval.kl_divergence import compute_distribution_distances
+            compute_distribution_distances(args.real_data_path, generated_csv)
+        except Exception as e:
+            print(f"[KL divergence] Could not compute: {e}")
+    else:
+        print(f"[KL divergence] Generated CSV not found at {generated_csv}")

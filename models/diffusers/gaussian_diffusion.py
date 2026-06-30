@@ -1,5 +1,6 @@
 from typing import Dict, Tuple
 import numpy as np
+import time
 import torch
 from einops import rearrange, repeat, reduce
 
@@ -97,12 +98,21 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
         tmp = torch.full(size=(x_0.shape[0],), fill_value=self.num_diffusionsteps-1, device=cst.DEVICE, dtype=torch.int64)
         x_t, _ = self.forward_reparametrized(x_0, tmp)
         time_steps = torch.flip(self.t, dims=(0,))
+        t_aug, t_step = 0.0, 0.0
         for i, step in enumerate(time_steps):
-            # augment
+            _t0 = time.perf_counter()
             x_t_aug, cond_orders, cond_lob = self.augment(x_t, orig_cond_orders, orig_cond_lob)
+            _t1 = time.perf_counter()
             index = len(time_steps) - i - 1
             ts = x_t.new_full((x_0.shape[0],), step, dtype=torch.long)
             x_t = self.ddim_single_step(x_t_aug, cond_lob, cond_orders, ts, index, x_t)
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            _t2 = time.perf_counter()
+            t_aug  += _t1 - _t0
+            t_step += _t2 - _t1
+        n = len(time_steps)
+        print(f"[Timing/DDIM] {n} steps — aug: {1000*t_aug/n:.2f} ms/step, NN+recon: {1000*t_step/n:.2f} ms/step, total: {1000*(t_aug+t_step):.1f} ms")
         return x_t
         
     def ddim_single_step(self, x_t_aug, cond_lob, cond_orders, ts, index, x_t):
@@ -133,11 +143,20 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
         t = torch.full(size=(x_0.shape[0],), fill_value=self.num_diffusionsteps-1, device=cst.DEVICE, dtype=torch.int64)
         x_t, noise = self.forward_reparametrized(x_0, t)
         x_t_orig = x_t
+        t_aug, t_step = 0.0, 0.0
         for i in range(self.num_diffusionsteps-1, -1, -1):
-            # augment
+            _t0 = time.perf_counter()
             x_t_aug, cond_orders, cond_lob = self.augment(x_t, orig_cond_orders, orig_cond_lob)
+            _t1 = time.perf_counter()
             x_t = self.ddpm_single_step(x_0, x_t_aug, x_t_orig, t, cond_orders, noise, weights, cond_lob)
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            _t2 = time.perf_counter()
+            t_aug  += _t1 - _t0
+            t_step += _t2 - _t1
             t -= 1
+        n = self.num_diffusionsteps
+        print(f"[Timing/DDPM] {n} steps — aug: {1000*t_aug/n:.2f} ms/step, NN+recon: {1000*t_step/n:.2f} ms/step, total: {1000*(t_aug+t_step):.1f} ms")
         return x_t
 
 

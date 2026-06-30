@@ -2,6 +2,7 @@ from einops import rearrange
 import numpy as np
 from torch import nn
 import os
+import time
 from lightning import LightningModule
 import torch
 import constants as cst
@@ -63,6 +64,11 @@ class DiffusionEngine(LightningModule):
         self.sampler = LossSecondMomentResampler(self.num_diffusionsteps)
         self.vlb_sampler = LossSecondMomentResampler(self.num_diffusionsteps)
         self.simple_sampler = LossSecondMomentResampler(self.num_diffusionsteps)
+        # per-phase timing accumulators (seconds); reset each epoch
+        self._t = {"forward": 0.0, "loss": 0.0, "ema": 0.0, "sampler": 0.0, "total": 0.0}
+        self._t_steps = 0
+        self._t_val_total = 0.0
+        self._t_val_steps = 0
         self.save_hyperparameters()
         
 
@@ -125,9 +131,6 @@ class DiffusionEngine(LightningModule):
 
 
     def training_step(self, input, batch_idx):
-        #print(batch_idx)
-        #if batch_idx == 5:
-        #    print("stop")
         if self.global_step == 0 and self.IS_WANDB:
             self._define_log_metrics()
         x_0 = input[1].contiguous()
@@ -138,8 +141,16 @@ class DiffusionEngine(LightningModule):
         cond_lob.requires_grad_(True)
         if self.cond_type != 'full':
             cond_lob = None
+
+        t0 = time.perf_counter()
         recon = self.forward(cond_orders, x_0, cond_lob, is_train=True, batch_idx=batch_idx)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        t1 = time.perf_counter()
+
         batch_loss, L_simple, L_vlb = self.loss()
+        t2 = time.perf_counter()
+
         self.simple_train_losses.append(torch.mean(L_simple).item())
         self.vlb_train_losses.append(torch.mean(L_vlb).item())
         batch_loss_mean = torch.mean(batch_loss)
@@ -147,8 +158,19 @@ class DiffusionEngine(LightningModule):
         self.sampler.update_losses(self.t, batch_loss[0])
         self.vlb_sampler.update_losses(self.t, L_vlb[0])
         self.simple_sampler.update_losses(self.t, L_simple[0])
+        t3 = time.perf_counter()
+
         self.diffuser.init_losses()
         self.ema.update()
+        t4 = time.perf_counter()
+
+        self._t["forward"]  += t1 - t0
+        self._t["loss"]     += t2 - t1
+        self._t["sampler"]  += t3 - t2
+        self._t["ema"]      += t4 - t3
+        self._t["total"]    += t4 - t0
+        self._t_steps       += 1
+
         if batch_idx % 1000 == 0:
             print(f"batch loss: {batch_loss_mean}")
         return batch_loss_mean
@@ -202,7 +224,7 @@ class DiffusionEngine(LightningModule):
         cond_lob = input[2]
         if self.cond_type != 'full':
             cond_lob = None
-        # Validation: with EMA
+        t0 = time.perf_counter()
         with self.ema.average_parameters():
             recon = self.forward(cond_orders, x_0, cond_lob, is_train=False)
             batch_loss, L_simple, L_vlb = self.loss()
@@ -210,12 +232,36 @@ class DiffusionEngine(LightningModule):
             self.vlb_val_losses.append(torch.mean(L_vlb).item())
             batch_loss_mean = torch.mean(batch_loss)
             self.val_ema_losses.append(batch_loss_mean.item())
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        self._t_val_total += time.perf_counter() - t0
+        self._t_val_steps += 1
         self.diffuser.init_losses()
         return batch_loss_mean
 
 
     def on_validation_epoch_end(self) -> None:
         loss_ema = sum(self.val_ema_losses) / len(self.val_ema_losses)
+
+        if self._t_steps > 0:
+            n = self._t_steps
+            t = self._t
+            tot = t["total"] if t["total"] > 0 else 1e-9
+            print(f"\n[Timing] Avg per training step (N={n}):")
+            print(f"  NN forward+aug : {1000*t['forward']/n:6.1f} ms  ({100*t['forward']/tot:4.1f}%)")
+            print(f"  Loss (MSE+VLB) : {1000*t['loss']/n:6.1f} ms  ({100*t['loss']/tot:4.1f}%)")
+            print(f"  Sampler update : {1000*t['sampler']/n:6.1f} ms  ({100*t['sampler']/tot:4.1f}%)")
+            print(f"  EMA update     : {1000*t['ema']/n:6.1f} ms  ({100*t['ema']/tot:4.1f}%)")
+            print(f"  Total          : {1000*t['total']/n:6.1f} ms")
+            for k in self._t:
+                self._t[k] = 0.0
+            self._t_steps = 0
+
+        if self._t_val_steps > 0:
+            avg_val_ms = 1000 * self._t_val_total / self._t_val_steps
+            print(f"[Timing] Avg per validation step: {avg_val_ms:.1f} ms")
+            self._t_val_total = 0.0
+            self._t_val_steps = 0
 
         # model checkpointing
         if loss_ema < self.min_loss_ema:
