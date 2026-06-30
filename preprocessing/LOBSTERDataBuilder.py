@@ -1,3 +1,4 @@
+import json
 import os
 from utils.utils_data import z_score_orderbook, normalize_messages, preprocess_data, z_score_market_features, normalize_order_cgan
 import pandas as pd
@@ -152,19 +153,43 @@ class LOBSTERDataBuilder:
             self.dataframes[i][1] = self.dataframes[i][1].astype(float)
             self.dataframes[i][1].loc[:, ::2] /= 100
 
-        #apply z score to orderbooks
+        # apply z score to orderbooks — capture training-set stats with lob_ prefix
         for i in range(len(self.dataframes)):
-            if (i == 0):
-                self.dataframes[i][1], mean_size, mean_prices, std_size, std_prices = z_score_orderbook(self.dataframes[i][1])
+            if i == 0:
+                self.dataframes[i][1], lob_mean_size, lob_mean_prices, lob_std_size, lob_std_prices = z_score_orderbook(self.dataframes[i][1])
             else:
-                self.dataframes[i][1], _, _, _, _ = z_score_orderbook(self.dataframes[i][1], mean_size, mean_prices, std_size, std_prices)
+                self.dataframes[i][1], _, _, _, _ = z_score_orderbook(self.dataframes[i][1], lob_mean_size, lob_mean_prices, lob_std_size, lob_std_prices)
 
-        #apply z-score to size and prices of messages with the statistics of the train set
+        # apply z-score to messages — capture training-set stats with evt_ prefix
         for i in range(len(self.dataframes)):
-            if (i == 0):
-                self.dataframes[i][0], mean_size, mean_prices, std_size, std_prices, mean_time, std_time, mean_depth, std_depth = normalize_messages(self.dataframes[i][0])
+            if i == 0:
+                self.dataframes[i][0], evt_mean_size, evt_mean_prices, evt_std_size, evt_std_prices, evt_mean_time, evt_std_time, evt_mean_depth, evt_std_depth = normalize_messages(self.dataframes[i][0])
             else:
-                self.dataframes[i][0], _, _, _, _, _, _, _, _ = normalize_messages(self.dataframes[i][0], mean_size, mean_prices, std_size, std_prices, mean_time, std_time, mean_depth, std_depth)
+                self.dataframes[i][0], _, _, _, _, _, _, _, _ = normalize_messages(self.dataframes[i][0], evt_mean_size, evt_mean_prices, evt_std_size, evt_std_prices, evt_mean_time, evt_std_time, evt_mean_depth, evt_std_depth)
+
+        # persist stats so simulation can load them without re-reading raw data
+        stats = {
+            "lob": {
+                "mean_size":  float(lob_mean_size),
+                "std_size":   float(lob_std_size),
+                "mean_price": float(lob_mean_prices),
+                "std_price":  float(lob_std_prices),
+            },
+            "event": {
+                "mean_size":  float(evt_mean_size),
+                "std_size":   float(evt_std_size),
+                "mean_price": float(evt_mean_prices),
+                "std_price":  float(evt_std_prices),
+                "mean_time":  float(evt_mean_time),
+                "std_time":   float(evt_std_time),
+                "mean_depth": float(evt_mean_depth),
+                "std_depth":  float(evt_std_depth),
+            },
+        }
+        stats_path = os.path.join(self.data_dir, self.stock_name, "normalization_stats.json")
+        with open(stats_path, "w") as f:
+            json.dump(stats, f, indent=2)
+        print(f"Saved normalization stats to {stats_path}")
 
     def _normalize_dataframes_gan(self):
         #apply z score to orderbooks
