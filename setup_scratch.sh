@@ -24,7 +24,7 @@ REPO_URL="https://github.com/Matt-McCrea/HSBC.git"
 BRANCH="${1:-main}"   # pass branch as first arg, e.g. bash setup_scratch.sh baseline
 # -------------------------------------------------------------
 
-SCRATCH="/scratch0/$USER"
+SCRATCH="/scratch0/mmccrea"
 REPO_DIR="$SCRATCH/HSBC"
 VENV_DIR="$SCRATCH/dmenv"
 
