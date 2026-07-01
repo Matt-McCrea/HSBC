@@ -21,7 +21,7 @@ set -e  # stop on first error
 
 # ---- EDIT THESE TWO LINES IF NEEDED -------------------------
 REPO_URL="https://github.com/Matt-McCrea/HSBC.git"
-BRANCH="main"   # all fixes are on main now
+BRANCH="${1:-main}"   # pass branch as first arg, e.g. bash setup_scratch.sh baseline
 # -------------------------------------------------------------
 
 SCRATCH="/scratch0/$USER"
