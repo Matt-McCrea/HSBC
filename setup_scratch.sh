@@ -27,11 +27,11 @@ BRANCH="${1:-main}"   # pass branch as first arg, e.g. bash setup_scratch.sh bas
 # SCRATCH can be overridden via env var if the default path doesn't exist:
 #   SCRATCH=/your/actual/scratch bash setup_scratch.sh baseline
 # Use id -un rather than $USER because $USER may resolve to a numeric UID on some systems.
-SCRATCH="${SCRATCH:-/scratch0/$(id -un)}"
+SCRATCH="${SCRATCH:-/scratch0/$(basename "$HOME")}"
 REPO_DIR="$SCRATCH/HSBC"
 VENV_DIR="$SCRATCH/dmenv"
 
-echo "=== DeepMarket scratch setup for $(id -un) ==="
+echo "=== DeepMarket scratch setup for $(basename "$HOME") ==="
 echo "Scratch base: $SCRATCH"
 
 # 1. Make scratch subdirs (the top-level scratch dir must already exist)
