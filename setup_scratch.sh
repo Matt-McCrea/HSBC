@@ -24,15 +24,24 @@ REPO_URL="https://github.com/Matt-McCrea/HSBC.git"
 BRANCH="${1:-main}"   # pass branch as first arg, e.g. bash setup_scratch.sh baseline
 # -------------------------------------------------------------
 
-SCRATCH="/scratch0/$USER"
+# SCRATCH can be overridden via env var if the default path doesn't exist:
+#   SCRATCH=/your/actual/scratch bash setup_scratch.sh baseline
+# Use id -un rather than $USER because $USER may resolve to a numeric UID on some systems.
+SCRATCH="${SCRATCH:-/scratch0/$(id -un)}"
 REPO_DIR="$SCRATCH/HSBC"
 VENV_DIR="$SCRATCH/dmenv"
 
-echo "=== DeepMarket scratch setup for $USER ==="
+echo "=== DeepMarket scratch setup for $(id -un) ==="
 echo "Scratch base: $SCRATCH"
 
-# 1. Make scratch dirs for venv + redirected caches
-mkdir -p "$SCRATCH"
+# 1. Make scratch subdirs (the top-level scratch dir must already exist)
+if [ ! -d "$SCRATCH" ]; then
+    echo ""
+    echo "ERROR: Scratch directory does not exist: $SCRATCH"
+    echo "Find your actual scratch path (run: ls /scratch0/ && echo \$HOME) then re-run as:"
+    echo "  SCRATCH=/correct/path bash setup_scratch.sh $BRANCH"
+    exit 1
+fi
 mkdir -p "$SCRATCH/pip-cache" "$SCRATCH/mplconfig" "$SCRATCH/hf" "$SCRATCH/torch" "$SCRATCH/.cache"
 
 # 2. Clone the repo fresh (your data is committed, so it comes too)
