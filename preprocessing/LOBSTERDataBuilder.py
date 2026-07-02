@@ -218,9 +218,13 @@ class LOBSTERDataBuilder:
 
 
     def _split_days(self):
-        train = int(self.num_trading_days * self.split_rates[0])
-        val = int(self.num_trading_days * self.split_rates[1]) + train
-        test = int(self.num_trading_days * self.split_rates[2]) + val
+        n = self.num_trading_days
+        train = int(n * self.split_rates[0])
+        val = int(n * self.split_rates[1]) + train
+        test = int(n * self.split_rates[2]) + val
+        # int() truncation can collapse small datasets to zero-day splits; guarantee at least 1 day each
+        val = max(val, train + 1)
+        test = max(test, val + 1)
         print(f"There are {train} days for training, {val - train} days for validation and {test - val} days for testing")
         return [train, val, test]
 
