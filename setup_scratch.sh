@@ -24,7 +24,7 @@ REPO_URL="https://github.com/Matt-McCrea/HSBC.git"
 BRANCH="main"   # all fixes are on main now
 # -------------------------------------------------------------
 
-SCRATCH="/scratch0/$USER"
+SCRATCH="/scratch0/mmccrea"
 REPO_DIR="$SCRATCH/HSBC"
 VENV_DIR="$SCRATCH/dmenv"
 
