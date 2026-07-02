@@ -28,7 +28,7 @@ SCRATCH="/scratch0/mmccrea"
 REPO_DIR="$SCRATCH/HSBC"
 VENV_DIR="$SCRATCH/dmenv"
 
-echo "=== DeepMarket scratch setup for $USER ==="
+echo "=== DeepMarket scratch setup for mmccrea ==="
 echo "Scratch base: $SCRATCH"
 
 # 1. Make scratch dirs for venv + redirected caches
