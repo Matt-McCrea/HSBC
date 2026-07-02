@@ -35,12 +35,12 @@ echo "Scratch base: $SCRATCH"
 mkdir -p "$SCRATCH"
 mkdir -p "$SCRATCH/pip-cache" "$SCRATCH/mplconfig" "$SCRATCH/hf" "$SCRATCH/torch" "$SCRATCH/.cache"
 
-# 2. Clone the repo fresh (your data is committed, so it comes too)
+# 2. Clone the repo fresh, or force-reset to origin (scratch is ephemeral; origin is authoritative)
 if [ -d "$REPO_DIR/.git" ]; then
-    echo "Repo already present, pulling latest..."
+    echo "Repo already present, syncing to origin/$BRANCH..."
     git -C "$REPO_DIR" fetch origin
-    git -C "$REPO_DIR" checkout "$BRANCH"
-    git -C "$REPO_DIR" pull origin "$BRANCH"
+    git -C "$REPO_DIR" checkout -f "$BRANCH"
+    git -C "$REPO_DIR" reset --hard "origin/$BRANCH"
 else
     echo "Cloning $REPO_URL ($BRANCH)..."
     git clone --branch "$BRANCH" "$REPO_URL" "$REPO_DIR"
