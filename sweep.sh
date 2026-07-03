@@ -47,9 +47,7 @@ mkdir -p "$OUT_DIR/logs"
 # ── Solver × NFE grid ─────────────────────────────────────────────────────────
 # Format: "SOLVER:NSTEPS"  NFE = NSTEPS for all solvers except UNIPC (NFE = 2×NSTEPS)
 CONFIGS=(
-    "DDIM:5"
-    "DDIM:10"
-    "DDIM:20"
+    # ── Fast ODE solvers (primary contribution) ──────────────────────────
     "DPM_SOLVER_PP:4"
     "DPM_SOLVER_PP:8"
     "DPM_SOLVER_PP:10"
@@ -62,6 +60,11 @@ CONFIGS=(
     "UNIPC:4"
     "UNIPC:5"
     "UNIPC:10"
+    # ── Baselines (run last — DDIM is fast, DDPM is slow) ────────────────
+    "DDIM:5"
+    "DDIM:10"
+    "DDIM:20"
+    "DDPM:100"   # nsteps ignored by DDPM — always runs all 100 diffusion steps
 )
 
 # ── Summary CSV ───────────────────────────────────────────────────────────────

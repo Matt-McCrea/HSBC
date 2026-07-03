@@ -68,6 +68,11 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
             / (1.0 - self.alphas_cumprod)
         )
             
+        # Timing accumulators: updated each sample() call, printed once at end of simulation
+        self._t_aug   = 0.0   # seconds in augment/deaugment
+        self._t_step  = 0.0   # seconds in NN forward + reconstruction
+        self._n_calls = 0     # number of sample() calls (= orders generated)
+
         if self.sampling_type in ("DDIM", "DPM_SOLVER", "DPM_SOLVER_PP", "UNIPC"):
             self.ddim_eta = config.HYPER_PARAMETERS[LearningHyperParameter.DDIM_ETA]
             self.ddim_nsteps = config.HYPER_PARAMETERS[LearningHyperParameter.DDIM_NSTEPS]
@@ -132,8 +137,7 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
             eps_prev, h_prev = eps, h
             if torch.cuda.is_available(): torch.cuda.synchronize()
             t_aug += _t1 - _t0; t_step += time.perf_counter() - _t1
-        n = len(time_steps)
-        print(f"[Timing/DPM_SOLVER] {n} steps — aug: {1000*t_aug/n:.2f} ms/step, NN+recon: {1000*t_step/n:.2f} ms/step, total: {1000*(t_aug+t_step):.1f} ms")
+        self._t_aug += t_aug; self._t_step += t_step; self._n_calls += 1
         return x_t
 
     def dpm_solver_pp_sample(self, x_0, cond_orders, cond_lob):
@@ -170,8 +174,7 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
             x0_prev, h_prev = x0hat, h
             if torch.cuda.is_available(): torch.cuda.synchronize()
             t_aug += _t1 - _t0; t_step += time.perf_counter() - _t1
-        n = len(time_steps)
-        print(f"[Timing/DPM_SOLVER_PP] {n} steps — aug: {1000*t_aug/n:.2f} ms/step, NN+recon: {1000*t_step/n:.2f} ms/step, total: {1000*(t_aug+t_step):.1f} ms")
+        self._t_aug += t_aug; self._t_step += t_step; self._n_calls += 1
         return x_t
 
     def unipc_sample(self, x_0, cond_orders, cond_lob):
@@ -215,11 +218,27 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
             x0_prev, h_prev = x0_p, h
             if torch.cuda.is_available(): torch.cuda.synchronize()
             t_aug += _t1 - _t0; t_step += time.perf_counter() - _t1
-        n = len(time_steps)
-        print(f"[Timing/UNIPC] {n} steps ({2*n} NFE) — aug: {1000*t_aug/n:.2f} ms/step, NN+recon: {1000*t_step/n:.2f} ms/step, total: {1000*(t_aug+t_step):.1f} ms")
+        self._t_aug += t_aug; self._t_step += t_step; self._n_calls += 1
         return x_t
         
         
+    def timing_summary(self) -> str:
+        """Return a human-readable timing summary across all sample() calls."""
+        n = self._n_calls
+        if n == 0:
+            return "[Timing] No sample() calls recorded."
+        total_s  = self._t_aug + self._t_step
+        ms_per   = 1000 * total_s / n
+        aug_ms   = 1000 * self._t_aug  / n
+        step_ms  = 1000 * self._t_step / n
+        lines = [
+            f"[Timing/{self.sampling_type}] {n} orders generated",
+            f"  per order : {ms_per:.2f} ms  (aug {aug_ms:.2f} ms + NN {step_ms:.2f} ms)",
+            f"  total wall: {total_s:.1f} s",
+            f"  throughput: {n / total_s:.1f} orders/s",
+        ]
+        return "\n".join(lines)
+
     def ddim_sample(self, x_0, cond_orders, cond_lob):
         orig_cond_orders = cond_orders.detach().clone()
         if cond_lob is not None:
@@ -242,8 +261,7 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
             _t2 = time.perf_counter()
             t_aug  += _t1 - _t0
             t_step += _t2 - _t1
-        n = len(time_steps)
-        print(f"[Timing/DDIM] {n} steps — aug: {1000*t_aug/n:.2f} ms/step, NN+recon: {1000*t_step/n:.2f} ms/step, total: {1000*(t_aug+t_step):.1f} ms")
+        self._t_aug += t_aug; self._t_step += t_step; self._n_calls += 1
         return x_t
         
     def ddim_single_step(self, x_t_aug, cond_lob, cond_orders, ts, index, x_t):
@@ -286,8 +304,7 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
             t_aug  += _t1 - _t0
             t_step += _t2 - _t1
             t -= 1
-        n = self.num_diffusionsteps
-        print(f"[Timing/DDPM] {n} steps — aug: {1000*t_aug/n:.2f} ms/step, NN+recon: {1000*t_step/n:.2f} ms/step, total: {1000*(t_aug+t_step):.1f} ms")
+        self._t_aug += t_aug; self._t_step += t_step; self._n_calls += 1
         return x_t
 
 

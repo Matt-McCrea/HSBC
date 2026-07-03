@@ -391,6 +391,17 @@ simulation_end_time = dt.datetime.now()
 print("Simulation End Time: {}".format(simulation_end_time))
 print("Time taken to run simulation: {}".format(simulation_end_time - simulation_start_time))
 
+# Sampler timing summary (accumulated across all generated orders)
+if args.diffusion and 'model' in dir() and hasattr(model, 'diffuser'):
+    summary = model.diffuser.timing_summary()
+    print("\n" + summary)
+    timing_path = os.path.join("ABIDES", "log", log_dir, "timing_summary.txt")
+    try:
+        with open(timing_path, "w") as _f:
+            _f.write(summary + "\n")
+    except Exception:
+        pass
+
 # KL divergence report: compare generated orders to real data
 if args.real_data_path:
     generated_csv = os.path.join("ABIDES", "log", log_dir, "processed_orders.csv")
