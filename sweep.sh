@@ -105,7 +105,7 @@ for CONFIG in "${CONFIGS[@]}"; do
 
     # -- Build simulation command --
     SIM_ARGS=(
-        python ABIDES/config/world_agent_sim.py
+        python ABIDES/abides.py
         -c world_agent_sim
         -t "$TICKER"
         -date "$DATE"
