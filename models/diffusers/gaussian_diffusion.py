@@ -68,25 +68,156 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
             / (1.0 - self.alphas_cumprod)
         )
             
-        if self.sampling_type == "DDIM":
+        if self.sampling_type in ("DDIM", "DPM_SOLVER", "DPM_SOLVER_PP", "UNIPC"):
             self.ddim_eta = config.HYPER_PARAMETERS[LearningHyperParameter.DDIM_ETA]
             self.ddim_nsteps = config.HYPER_PARAMETERS[LearningHyperParameter.DDIM_NSTEPS]
             tmp = self.num_diffusionsteps / self.ddim_nsteps
             self.t = torch.arange(0, self.num_diffusionsteps, tmp).long() + 1
+            # ᾱ_t at each subsampled step and its predecessor (one step cleaner)
             self.ddim_alpha = self.alphas_cumprod[self.t].clone()
-            self.ddim_alpha_sqrt = torch.sqrt(self.ddim_alpha)
+            self.ddim_alpha_sqrt = torch.sqrt(self.ddim_alpha)           # α_t = √ᾱ_t
             self.ddim_alpha_prev = torch.cat([torch.Tensor([self.alphas_cumprod[0]]).to(cst.DEVICE), self.alphas_cumprod[self.t[:-1]]])
-            self.ddim_sqrt_one_minus_alpha = (1. - self.ddim_alpha) ** .5
-            self.ddim_sigma = (self.ddim_eta *
-                               ((1 - self.ddim_alpha_prev) / (1 - self.ddim_alpha) *
-                                (1 - self.ddim_alpha / self.ddim_alpha_prev)) ** .5)
+            self.ddim_sqrt_one_minus_alpha = (1. - self.ddim_alpha) ** .5  # σ_t = √(1-ᾱ_t)
+            if self.sampling_type == "DDIM":
+                self.ddim_sigma = (self.ddim_eta *
+                                   ((1 - self.ddim_alpha_prev) / (1 - self.ddim_alpha) *
+                                    (1 - self.ddim_alpha / self.ddim_alpha_prev)) ** .5)
             
         
     def sample(self, x_0, real_cond_orders, real_cond_lob, weights):
-        if self.sampling_type == "DDIM":
-            return self.ddim_sample(x_0, real_cond_orders, real_cond_lob)
-        elif self.sampling_type == "DDPM":
-            return self.ddpm_sample(x_0, real_cond_orders, real_cond_lob, weights)
+        if   self.sampling_type == "DDIM":          return self.ddim_sample(x_0, real_cond_orders, real_cond_lob)
+        elif self.sampling_type == "DDPM":          return self.ddpm_sample(x_0, real_cond_orders, real_cond_lob, weights)
+        elif self.sampling_type == "DPM_SOLVER":    return self.dpm_solver_sample(x_0, real_cond_orders, real_cond_lob)
+        elif self.sampling_type == "DPM_SOLVER_PP": return self.dpm_solver_pp_sample(x_0, real_cond_orders, real_cond_lob)
+        elif self.sampling_type == "UNIPC":         return self.unipc_sample(x_0, real_cond_orders, real_cond_lob)
+
+    def _get_eps(self, x_t, ts, orig_cond_orders, orig_cond_lob):
+        """Single denoiser call: augment → NN → deaugment. Returns predicted noise ε."""
+        x_t_aug, cond_orders, cond_lob = self.augment(x_t, orig_cond_orders, orig_cond_lob)
+        noise_pred, v = self.NN(x_t_aug, cond_orders, ts, cond_lob)
+        if self.IS_AUGMENTATION:
+            noise_pred, v = self.deaugment(noise_pred, v)
+        return noise_pred
+
+    def dpm_solver_sample(self, x_0, cond_orders, cond_lob):
+        """DPM-Solver (ε-prediction, 2nd-order multistep).
+        Lu et al. 2022 — exponential integrator on the noise-prediction ODE.
+        Falls back to 1st-order on the first step (no history).
+        NFE = ddim_nsteps."""
+        orig_cond_orders = cond_orders.detach().clone()
+        orig_cond_lob = cond_lob.detach().clone() if cond_lob is not None else None
+        tmp = torch.full((x_0.shape[0],), self.num_diffusionsteps - 1, device=cst.DEVICE, dtype=torch.int64)
+        x_t, _ = self.forward_reparametrized(x_0, tmp)
+        time_steps = torch.flip(self.t, dims=(0,))  # [T-1, ..., 1] — noisy to clean
+        eps_prev, h_prev = None, None
+        t_aug, t_step = 0.0, 0.0
+        for i, step in enumerate(time_steps):
+            _t0 = time.perf_counter()
+            index = len(time_steps) - i - 1
+            alpha_t  = self.ddim_alpha_sqrt[index]                       # √ᾱ_t
+            sigma_t  = self.ddim_sqrt_one_minus_alpha[index]             # √(1-ᾱ_t)
+            alpha_s  = torch.sqrt(self.ddim_alpha_prev[index])           # √ᾱ_{t-1}
+            sigma_s  = torch.sqrt(1.0 - self.ddim_alpha_prev[index])    # √(1-ᾱ_{t-1})
+            lambda_t = torch.log(alpha_t) - torch.log(sigma_t)          # log SNR at t
+            lambda_s = torch.log(alpha_s) - torch.log(sigma_s)          # log SNR at t-1
+            h = lambda_s - lambda_t                                       # > 0 (going cleaner)
+            ts = x_t.new_full((x_0.shape[0],), step, dtype=torch.long)
+            _t1 = time.perf_counter()
+            eps = self._get_eps(x_t, ts, orig_cond_orders, orig_cond_lob)
+            # 2nd-order multistep correction using previous ε
+            eps_corr = ((1.0 + 0.5 / (h_prev / h)) * eps - (0.5 / (h_prev / h)) * eps_prev
+                        if eps_prev is not None else eps)
+            # x_s = (α_s/α_t) x_t − σ_s · expm1(h) · ε̂
+            x_t = (alpha_s / alpha_t) * x_t - sigma_s * torch.expm1(h) * eps_corr
+            eps_prev, h_prev = eps, h
+            if torch.cuda.is_available(): torch.cuda.synchronize()
+            t_aug += _t1 - _t0; t_step += time.perf_counter() - _t1
+        n = len(time_steps)
+        print(f"[Timing/DPM_SOLVER] {n} steps — aug: {1000*t_aug/n:.2f} ms/step, NN+recon: {1000*t_step/n:.2f} ms/step, total: {1000*(t_aug+t_step):.1f} ms")
+        return x_t
+
+    def dpm_solver_pp_sample(self, x_0, cond_orders, cond_lob):
+        """DPM-Solver++ (x̂₀-prediction, 2nd-order multistep).
+        Lu et al. 2022 — more stable than ε-prediction at very low NFE.
+        Falls back to 1st-order on the first step (no history).
+        NFE = ddim_nsteps."""
+        orig_cond_orders = cond_orders.detach().clone()
+        orig_cond_lob = cond_lob.detach().clone() if cond_lob is not None else None
+        tmp = torch.full((x_0.shape[0],), self.num_diffusionsteps - 1, device=cst.DEVICE, dtype=torch.int64)
+        x_t, _ = self.forward_reparametrized(x_0, tmp)
+        time_steps = torch.flip(self.t, dims=(0,))
+        x0_prev, h_prev = None, None
+        t_aug, t_step = 0.0, 0.0
+        for i, step in enumerate(time_steps):
+            _t0 = time.perf_counter()
+            index = len(time_steps) - i - 1
+            alpha_t  = self.ddim_alpha_sqrt[index]
+            sigma_t  = self.ddim_sqrt_one_minus_alpha[index]
+            alpha_s  = torch.sqrt(self.ddim_alpha_prev[index])
+            sigma_s  = torch.sqrt(1.0 - self.ddim_alpha_prev[index])
+            lambda_t = torch.log(alpha_t) - torch.log(sigma_t)
+            lambda_s = torch.log(alpha_s) - torch.log(sigma_s)
+            h = lambda_s - lambda_t
+            ts = x_t.new_full((x_0.shape[0],), step, dtype=torch.long)
+            _t1 = time.perf_counter()
+            eps   = self._get_eps(x_t, ts, orig_cond_orders, orig_cond_lob)
+            x0hat = (x_t - sigma_t * eps) / alpha_t                     # x̂₀ from ε
+            # 2nd-order multistep correction using previous x̂₀
+            D = ((1.0 + 0.5 / (h_prev / h)) * x0hat - (0.5 / (h_prev / h)) * x0_prev
+                 if x0_prev is not None else x0hat)
+            # x_s = (σ_s/σ_t) x_t + α_s (1 − e^{−h}) D
+            x_t = (sigma_s / sigma_t) * x_t + alpha_s * (-torch.expm1(-h)) * D
+            x0_prev, h_prev = x0hat, h
+            if torch.cuda.is_available(): torch.cuda.synchronize()
+            t_aug += _t1 - _t0; t_step += time.perf_counter() - _t1
+        n = len(time_steps)
+        print(f"[Timing/DPM_SOLVER_PP] {n} steps — aug: {1000*t_aug/n:.2f} ms/step, NN+recon: {1000*t_step/n:.2f} ms/step, total: {1000*(t_aug+t_step):.1f} ms")
+        return x_t
+
+    def unipc_sample(self, x_0, cond_orders, cond_lob):
+        """UniPC — unified predictor-corrector (Zhao et al. 2023).
+        Each step: one NN eval to predict x_s, one corrector eval at x_s.
+        NFE = 2 × ddim_nsteps. Use half the nsteps vs DPM-Solver++ for equal NFE."""
+        orig_cond_orders = cond_orders.detach().clone()
+        orig_cond_lob = cond_lob.detach().clone() if cond_lob is not None else None
+        tmp = torch.full((x_0.shape[0],), self.num_diffusionsteps - 1, device=cst.DEVICE, dtype=torch.int64)
+        x_t, _ = self.forward_reparametrized(x_0, tmp)
+        time_steps = torch.flip(self.t, dims=(0,))
+        x0_prev, h_prev = None, None
+        t_aug, t_step = 0.0, 0.0
+        for i, step in enumerate(time_steps):
+            _t0 = time.perf_counter()
+            index = len(time_steps) - i - 1
+            alpha_t  = self.ddim_alpha_sqrt[index]
+            sigma_t  = self.ddim_sqrt_one_minus_alpha[index]
+            alpha_s  = torch.sqrt(self.ddim_alpha_prev[index])
+            sigma_s  = torch.sqrt(1.0 - self.ddim_alpha_prev[index])
+            lambda_t = torch.log(alpha_t) - torch.log(sigma_t)
+            lambda_s = torch.log(alpha_s) - torch.log(sigma_s)
+            h = lambda_s - lambda_t
+            ts   = x_t.new_full((x_0.shape[0],), step, dtype=torch.long)
+            # Timestep for corrector eval at the target (cleaner) state
+            t_s_val = self.t[index - 1].item() if index > 0 else 0
+            ts_s = x_t.new_full((x_0.shape[0],), t_s_val, dtype=torch.long)
+            _t1 = time.perf_counter()
+            # --- Predictor (DPM-Solver++ 2M) ---
+            eps_p   = self._get_eps(x_t, ts, orig_cond_orders, orig_cond_lob)
+            x0_p    = (x_t - sigma_t * eps_p) / alpha_t
+            D_p     = ((1.0 + 0.5 / (h_prev / h)) * x0_p - (0.5 / (h_prev / h)) * x0_prev
+                       if x0_prev is not None else x0_p)
+            x_s_pred = (sigma_s / sigma_t) * x_t + alpha_s * (-torch.expm1(-h)) * D_p
+            # --- Corrector (one extra NN eval at predicted x_s) ---
+            eps_c = self._get_eps(x_s_pred, ts_s, orig_cond_orders, orig_cond_lob)
+            x0_c  = (x_s_pred - sigma_s * eps_c) / alpha_s
+            # Blend predictor and corrector x̂₀ (equal weights)
+            D_c = 0.5 * x0_p + 0.5 * x0_c
+            x_t = (sigma_s / sigma_t) * x_t + alpha_s * (-torch.expm1(-h)) * D_c
+            x0_prev, h_prev = x0_p, h
+            if torch.cuda.is_available(): torch.cuda.synchronize()
+            t_aug += _t1 - _t0; t_step += time.perf_counter() - _t1
+        n = len(time_steps)
+        print(f"[Timing/UNIPC] {n} steps ({2*n} NFE) — aug: {1000*t_aug/n:.2f} ms/step, NN+recon: {1000*t_step/n:.2f} ms/step, total: {1000*(t_aug+t_step):.1f} ms")
+        return x_t
         
         
     def ddim_sample(self, x_0, cond_orders, cond_lob):

@@ -108,7 +108,6 @@ def run(config: Configuration, accelerator, model=None):
         profiler=None,
         check_val_every_n_epoch=1,
         val_check_interval=0.5,
-        gradient_clip_val=1.0,
     )
     train(config, trainer)
 
@@ -162,7 +161,6 @@ def run_wandb(config: Configuration, accelerator):
             profiler=None,
             val_check_interval=0.5,
             check_val_every_n_epoch=1,
-            gradient_clip_val=1.0,
         )
 
         # log simulation details in WANDB console
