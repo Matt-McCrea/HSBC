@@ -43,6 +43,15 @@ parser.add_argument('-v',
 parser.add_argument('--config_help',
                     action='store_true',
                     help='Print argument options for this config file')
+parser.add_argument('--lobster-data-dir',
+                    default=None,
+                    help='Root directory containing LOBSTER pipe-delimited order files. '
+                         'File is expected at <dir>/<ticker>/<ticker>.<date>. '
+                         'Defaults to /efs/data/DOW30 (original paper path).')
+parser.add_argument('--processed-orders-dir',
+                    default=None,
+                    help='Directory to write/cache processed order pickle and output CSV. '
+                         'Defaults to /efs/data/marketreplay/')
 
 args, remaining_args = parser.parse_known_args()
 
@@ -98,8 +107,9 @@ agent_types.extend("ExchangeAgent")
 agent_count += 1
 
 # 2) Market Replay Agent
-file_name = f'DOW30/{symbol}/{symbol}.{historical_date}'
-orders_file_path = f'/efs/data/{file_name}'
+lobster_root = args.lobster_data_dir if args.lobster_data_dir else '/efs/data/DOW30'
+orders_file_path = f'{lobster_root}/{symbol}/{symbol}.{historical_date}'
+processed_orders_dir = args.processed_orders_dir if args.processed_orders_dir else '/efs/data/marketreplay/'
 
 agents.extend([MarketReplayAgent(id=1,
                                  name="MARKET_REPLAY_AGENT",
@@ -110,7 +120,7 @@ agents.extend([MarketReplayAgent(id=1,
                                  start_time=mkt_open,
                                  end_time=mkt_close,
                                  orders_file_path=orders_file_path,
-                                 processed_orders_folder_path='/efs/data/marketreplay/',
+                                 processed_orders_folder_path=processed_orders_dir,
                                  starting_cash=0,
                                  random_state=np.random.RandomState(seed=np.random.randint(low=0, high=2 ** 32,
                                                                                            dtype='uint64')))])
