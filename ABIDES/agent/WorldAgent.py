@@ -163,36 +163,19 @@ class WorldAgent(Agent):
                 self.setWakeup(currentTime + offset_time + datetime.timedelta(microseconds=1))
                 return
 
-            #check if in the kernel messages queue there are messages for the first agent
-            wait = False
-            for timestamp, msg in self.kernel.messages.queue:
-                if msg[0] == self.id:
-                    wait = True
-                    
-            # first we place the last order generated and next we generate the next order
-            if len(self.next_orders) > 1 and not wait:
+            # Place the next queued order, or generate a new batch if the queue is empty.
+            # The O(n) kernel-queue scan was removed — ABIDES event ordering guarantees that
+            # exchange responses (ORDER_ACCEPTED etc.) are delivered via receiveMessage before
+            # the next wakeup fires, so waiting is unnecessary and was causing quadratic slowdown.
+            if len(self.next_orders) > 0:
                 self.placeOrder(currentTime, self.next_orders[0])
                 offset_time = datetime.timedelta(seconds=self.next_orders[0][0])
                 self.next_orders = self.next_orders[1:]
-                self.setWakeup(currentTime + offset_time + datetime.timedelta(microseconds=1))
-                return
-            
-            elif len(self.next_orders) == 1 and not wait:
-                self.placeOrder(currentTime, self.next_orders[0])
-                offset_time = datetime.timedelta(seconds=self.next_orders[0][0])
-                self.next_orders = []
-                self.setWakeup(currentTime + offset_time + datetime.timedelta(microseconds=1))
-                return
-            
-            elif len(self.next_orders) == 0 and not wait:
+            else:
                 self.next_orders = self._generate_order(currentTime)
                 offset_time = datetime.timedelta(seconds=self.next_orders[0][0])
-                self.setWakeup(currentTime + offset_time + datetime.timedelta(microseconds=1))
-                return 
-            
-            elif wait:
-                self.setWakeup(currentTime + datetime.timedelta(microseconds=1))
-                return 
+            self.setWakeup(currentTime + offset_time + datetime.timedelta(microseconds=1))
+            return
             
             
 
@@ -210,16 +193,22 @@ class WorldAgent(Agent):
         elif msg.body['msg'] == 'ORDER_EXECUTED':
             direction = 1 if msg.body['order'].is_buy_order else -1
             self.placed_orders.append(np.array([self.last_offset_time, 4, msg.body['order'].order_id, msg.body['order'].quantity, msg.body['order'].limit_price, direction]))
+            if len(self.placed_orders) > self.seq_len * 2:
+                self.placed_orders = self.placed_orders[-self.seq_len * 2:]
             self.logEvent('ORDER_EXECUTED', msg.body['order'].to_dict())
 
         elif msg.body['msg'] == 'ORDER_ACCEPTED':
             direction = 1 if msg.body['order'].is_buy_order else -1
             self.placed_orders.append(np.array([self.last_offset_time, 1, msg.body['order'].order_id, msg.body['order'].quantity, msg.body['order'].limit_price, direction]))
+            if len(self.placed_orders) > self.seq_len * 2:
+                self.placed_orders = self.placed_orders[-self.seq_len * 2:]
             self.logEvent('ORDER_ACCEPTED', msg.body['order'].to_dict())
 
         elif msg.body['msg'] == 'ORDER_CANCELLED':
             direction = 1 if msg.body['order'].is_buy_order else -1
             self.placed_orders.append(np.array([self.last_offset_time, 3, msg.body['order'].order_id, msg.body['order'].quantity, msg.body['order'].limit_price, direction]))
+            if len(self.placed_orders) > self.seq_len * 2:
+                self.placed_orders = self.placed_orders[-self.seq_len * 2:]
             self.logEvent('ORDER_CANCELLED', msg.body['order'].to_dict())
 
     def placeOrder(self, currentTime, order):
@@ -258,6 +247,8 @@ class WorldAgent(Agent):
                     )
                     self.modifyOrder(old_order, new_order)
                     self.placed_orders.append(np.array([order[0], 2, new_order.order_id, quantity, new_order.limit_price, direction]))
+                    if len(self.placed_orders) > self.seq_len * 2:
+                        self.placed_orders = self.placed_orders[-self.seq_len * 2:]
 
             elif type == 4:
                 # if type == 4 it means that it is an execution order, so if it is an execution order of a sell limit order
@@ -790,7 +781,11 @@ class WorldAgent(Agent):
                     for _ in range(4): last_lob_snapshot.append(0)
         self.last_lob_snapshot = last_lob_snapshot
         self.lob_snapshots.append(last_lob_snapshot)
+        if len(self.lob_snapshots) > self.seq_len * 4:
+            self.lob_snapshots = self.lob_snapshots[-self.seq_len * 4:]
         self.sparse_lob_snapshots.append(to_sparse_representation(last_lob_snapshot, 100))
+        if len(self.sparse_lob_snapshots) > self.seq_len * 4:
+            self.sparse_lob_snapshots = self.sparse_lob_snapshots[-self.seq_len * 4:]
         
         
     def _preprocess_market_features_for_cgan(self, lob_snapshots):
