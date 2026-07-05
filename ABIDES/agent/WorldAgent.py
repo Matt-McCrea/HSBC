@@ -621,6 +621,10 @@ class WorldAgent(Agent):
         orderbook[:, 0::2] = orderbook[:, 0::2] / 100
         orderbook[:, 0::2] = (orderbook[:, 0::2] - self.normalization_terms["lob"][2]) / self.normalization_terms["lob"][3]
         orderbook[:, 1::2] = (orderbook[:, 1::2] - self.normalization_terms["lob"][0]) / self.normalization_terms["lob"][1]
+        # Clip to ±3σ: values outside this range were effectively never seen during training.
+        # Without clipping, a drifted simulated price (e.g. ask=41 vs training mean=33.87) produces
+        # z-scores of +14, causing OOD conditioning that amplifies the drift in a positive feedback loop.
+        np.clip(orderbook, -3.0, 3.0, out=orderbook)
         return orderbook
 
 
@@ -686,7 +690,12 @@ class WorldAgent(Agent):
                                                                     )
         
 
-        return torch.from_numpy(orders_dataframe.to_numpy()).to(cst.DEVICE, torch.float32)
+        # Same OOD clipping as _z_score_orderbook: keeps conditioning in the training distribution
+        # even when simulated prices drift beyond the range seen during training.
+        return torch.clamp(
+            torch.from_numpy(orders_dataframe.to_numpy()).to(cst.DEVICE, torch.float32),
+            min=-3.0, max=3.0
+        )
 
 
     def _load_orders_lob(self, symbol, data_dir, date, date_trading_days):
