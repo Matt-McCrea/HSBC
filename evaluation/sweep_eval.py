@@ -21,6 +21,7 @@ import shutil
 import sys
 from pathlib import Path
 
+import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -125,22 +126,44 @@ if real_path is None:
     results["spread_pdf"] = "skipped"
 else:
     try:
-        from evaluation.visualizations.comparison_distribution_market_spread import main as spread_main
-        tmp_dir = out_dir / "_tmp_spread"
-        tmp_dir.mkdir(exist_ok=True)
-        tmp_csv = tmp_dir / "gen.csv"
-        shutil.copy(gen_path, tmp_csv)
-        spread_main(str(real_path), str(tmp_csv), str(real_path), str(real_path))
-        plt.close("all")
-        src = tmp_dir / "market_spread.pdf"
-        dst = out_dir / f"{tag}_spread.pdf"
-        if src.exists():
-            shutil.move(str(src), str(dst))
+        import pandas as pd
+        from scipy.stats import gaussian_kde
+
+        def _load_spread(csv_path):
+            df = pd.read_csv(csv_path, index_col=0)
+            if "SPREAD" in df.columns:
+                s = df["SPREAD"].dropna()
+            elif "ask_price_1" in df.columns and "bid_price_1" in df.columns:
+                s = (df["ask_price_1"] - df["bid_price_1"]).dropna()
+            else:
+                return None
+            # Filter out sentinel values (LOB not yet initialised)
+            s = s[(s > 0) & (s < 1)]
+            return s.values
+
+        r_spread = _load_spread(str(real_path))
+        g_spread = _load_spread(str(gen_path))
+
+        if r_spread is not None and g_spread is not None and len(r_spread) > 1 and len(g_spread) > 1:
+            fig, ax = plt.subplots(figsize=(6, 4))
+            for vals, label, color in [(r_spread, "Real", "black"), (g_spread, tag, "orange")]:
+                lo, hi = vals.min(), vals.max()
+                if hi > lo:
+                    xs = np.linspace(lo, hi, 300)
+                    kde = gaussian_kde(vals)
+                    ax.plot(xs, kde(xs), label=label, color=color)
+            ax.set_xlabel("Bid-Ask Spread ($)")
+            ax.set_ylabel("Density")
+            ax.set_title(f"Spread Distribution — {tag}")
+            ax.legend()
+            dst = out_dir / f"{tag}_spread.pdf"
+            fig.savefig(str(dst), bbox_inches="tight")
+            plt.close(fig)
             print(f"  -> saved {dst}")
             results["spread_pdf"] = str(dst)
         else:
-            print("  WARNING: market_spread.pdf not found in expected location")
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+            print("  WARNING: could not extract spread values from CSVs")
+            results["spread_pdf"] = "no_data"
     except Exception as e:
         print(f"  WARNING: spread distribution failed: {e}")
         results["spread_pdf"] = {"error": str(e)}

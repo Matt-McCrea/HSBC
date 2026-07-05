@@ -24,6 +24,7 @@ class LearningHyperParameter(str, Enum):
     P_NORM = "p_norm"
     DDIM_ETA = "ddim_eta"
     DDIM_NSTEPS = "ddim_nsteps"
+    DDIM_TAIL_STEPS = "ddim_tail_steps"  # for HYBRID_PP_DDIM: number of DDIM steps at the end
     ONE_HOT_ENCODING_TYPE = "one_hot_encoding_type"
     CSDI_SIDE_DIM = "CSDI_side_dim"
     CSDI_CHANNELS = "CSDI_channels"

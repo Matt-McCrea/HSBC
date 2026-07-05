@@ -73,9 +73,11 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
         self._t_step  = 0.0   # seconds in NN forward + reconstruction
         self._n_calls = 0     # number of sample() calls (= orders generated)
 
-        if self.sampling_type in ("DDIM", "DPM_SOLVER", "DPM_SOLVER_PP", "UNIPC"):
+        if self.sampling_type in ("DDIM", "DPM_SOLVER", "DPM_SOLVER_PP", "UNIPC", "HYBRID_PP_DDIM"):
             self.ddim_eta = config.HYPER_PARAMETERS[LearningHyperParameter.DDIM_ETA]
             self.ddim_nsteps = config.HYPER_PARAMETERS[LearningHyperParameter.DDIM_NSTEPS]
+            self._hybrid_tail_steps = config.HYPER_PARAMETERS.get(
+                LearningHyperParameter.DDIM_TAIL_STEPS, 2)
             tmp = self.num_diffusionsteps / self.ddim_nsteps
             self.t = torch.arange(0, self.num_diffusionsteps, tmp).long() + 1
             # ᾱ_t at each subsampled step and its predecessor (one step cleaner)
@@ -95,6 +97,10 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
         elif self.sampling_type == "DPM_SOLVER":    return self.dpm_solver_sample(x_0, real_cond_orders, real_cond_lob)
         elif self.sampling_type == "DPM_SOLVER_PP": return self.dpm_solver_pp_sample(x_0, real_cond_orders, real_cond_lob)
         elif self.sampling_type == "UNIPC":         return self.unipc_sample(x_0, real_cond_orders, real_cond_lob)
+        elif self.sampling_type == "HYBRID_PP_DDIM":
+            tail = getattr(self, "_hybrid_tail_steps", 2)
+            main = self.ddim_nsteps - tail
+            return self.hybrid_pp_ddim_sample(x_0, real_cond_orders, real_cond_lob, main, tail)
 
     def _get_eps(self, x_t, ts, orig_cond_orders, orig_cond_lob):
         """Single denoiser call: augment → NN → deaugment. Returns predicted noise ε."""
@@ -174,6 +180,60 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
             x0_prev, h_prev = x0hat, h
             if torch.cuda.is_available(): torch.cuda.synchronize()
             t_aug += _t1 - _t0; t_step += time.perf_counter() - _t1
+        self._t_aug += t_aug; self._t_step += t_step; self._n_calls += 1
+        return x_t
+
+    def hybrid_pp_ddim_sample(self, x_0, cond_orders, cond_lob, num_pp_steps, num_ddim_steps):
+        """DPM-Solver++ for the first num_pp_steps, then deterministic DDIM (eta=0) for num_ddim_steps.
+        Total NFE = num_pp_steps + num_ddim_steps = ddim_nsteps.
+        PP handles high-noise steps efficiently; DDIM tail prevents price overshooting at low noise."""
+        orig_cond_orders = cond_orders.detach().clone()
+        orig_cond_lob = cond_lob.detach().clone() if cond_lob is not None else None
+        tmp = torch.full((x_0.shape[0],), self.num_diffusionsteps - 1, device=cst.DEVICE, dtype=torch.int64)
+        x_t, _ = self.forward_reparametrized(x_0, tmp)
+        time_steps = torch.flip(self.t, dims=(0,))
+        t_aug, t_step = 0.0, 0.0
+
+        # ── Phase 1: DPM-Solver++ (high-to-medium noise) ──────────────────────
+        x0_prev, h_prev = None, None
+        for i, step in enumerate(time_steps[:num_pp_steps]):
+            _t0 = time.perf_counter()
+            index = len(time_steps) - i - 1
+            alpha_t  = self.ddim_alpha_sqrt[index]
+            sigma_t  = self.ddim_sqrt_one_minus_alpha[index]
+            alpha_s  = torch.sqrt(self.ddim_alpha_prev[index])
+            sigma_s  = torch.sqrt(1.0 - self.ddim_alpha_prev[index])
+            lambda_t = torch.log(alpha_t) - torch.log(sigma_t)
+            lambda_s = torch.log(alpha_s) - torch.log(sigma_s)
+            h = lambda_s - lambda_t
+            ts = x_t.new_full((x_0.shape[0],), step, dtype=torch.long)
+            _t1 = time.perf_counter()
+            eps   = self._get_eps(x_t, ts, orig_cond_orders, orig_cond_lob)
+            x0hat = (x_t - sigma_t * eps) / alpha_t
+            D = ((1.0 + 0.5 / (h_prev / h)) * x0hat - (0.5 / (h_prev / h)) * x0_prev
+                 if x0_prev is not None else x0hat)
+            x_t = (sigma_s / sigma_t) * x_t + alpha_s * (-torch.expm1(-h)) * D
+            x0_prev, h_prev = x0hat, h
+            if torch.cuda.is_available(): torch.cuda.synchronize()
+            t_aug += _t1 - _t0; t_step += time.perf_counter() - _t1
+
+        # ── Phase 2: deterministic DDIM (low-noise refinement, eta=0) ─────────
+        for i_ddim, step in enumerate(time_steps[num_pp_steps:]):
+            i = num_pp_steps + i_ddim
+            _t0 = time.perf_counter()
+            index = len(time_steps) - i - 1
+            alpha      = self.ddim_alpha[index]
+            alpha_prev = self.ddim_alpha_prev[index]
+            sqrt_one_minus_alpha = self.ddim_sqrt_one_minus_alpha[index]
+            ts = x_t.new_full((x_0.shape[0],), step, dtype=torch.long)
+            _t1 = time.perf_counter()
+            noise_t = self._get_eps(x_t, ts, orig_cond_orders, orig_cond_lob)
+            pred_x0 = (x_t - sqrt_one_minus_alpha * noise_t) / (alpha ** 0.5)
+            dir_xt  = (1. - alpha_prev).sqrt() * noise_t  # sigma=0 deterministic
+            x_t = (alpha_prev ** 0.5) * pred_x0 + dir_xt
+            if torch.cuda.is_available(): torch.cuda.synchronize()
+            t_aug += _t1 - _t0; t_step += time.perf_counter() - _t1
+
         self._t_aug += t_aug; self._t_step += t_step; self._n_calls += 1
         return x_t
 

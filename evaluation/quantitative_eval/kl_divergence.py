@@ -25,15 +25,22 @@ _EPS = 1e-10  # smoothing to avoid log(0)
 
 
 def _load_and_filter(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path)
-    # Drop warm-up period (first 15 min), matching WorldAgent's convention
-    if "Time" in df.columns:
-        df["_time_str"] = df["Time"].astype(str).str.slice(11, 19)
-        df = df[df["_time_str"] >= "09:45:00"].drop(columns=["_time_str"])
+    # index_col=0 preserves the timestamp as the index (first unnamed column in processed_orders.csv)
+    df = pd.read_csv(path, index_col=0)
+    # Parse datetime index and drop warm-up (first 15 min = before WorldAgent starts generating)
+    try:
+        df.index = pd.to_datetime(df.index)
+        cutoff = df.index[0].normalize() + pd.Timedelta("9h45m")
+        df = df[df.index >= cutoff]
+    except Exception:
+        pass
     # Remove extreme price levels used as sentinels
     for col in ("ask_price_1", "bid_price_1"):
         if col in df.columns:
             df = df[(df[col] < 9_999_999) & (df[col] > -9_999_999)]
+    # Compute inter-arrival time (seconds) from timestamp index
+    df["TIME"] = df.index.to_series().diff().dt.total_seconds()
+    df["TIME"] = df["TIME"].clip(lower=0).fillna(0)
     return df.reset_index(drop=True)
 
 

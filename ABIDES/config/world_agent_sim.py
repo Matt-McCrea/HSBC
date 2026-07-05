@@ -111,6 +111,10 @@ parser.add_argument('-nsteps',
                     type=int,
                     default=1,
                     help='nsteps for DDIM')
+parser.add_argument('--tail-steps',
+                    type=int,
+                    default=2,
+                    help='For HYBRID_PP_DDIM: number of DDIM steps appended after DPM-Solver++ steps')
 parser.add_argument('--real-data-path',
                     type=str,
                     default=None,
@@ -248,6 +252,7 @@ if args.diffusion:
     config.SAMPLING_TYPE = args.sampling_type
     config.HYPER_PARAMETERS[cst.LearningHyperParameter.DDIM_ETA] = args.ddim_eta
     config.HYPER_PARAMETERS[cst.LearningHyperParameter.DDIM_NSTEPS] = args.ddim_nsteps
+    config.HYPER_PARAMETERS[cst.LearningHyperParameter.DDIM_TAIL_STEPS] = args.tail_steps
     if config.CHOSEN_MODEL == cst.Models.TRADES:
         # load checkpoint
         model = DiffusionEngine.load_from_checkpoint(checkpoint_reference, config=config, map_location=cst.DEVICE)

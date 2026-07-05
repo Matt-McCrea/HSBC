@@ -45,23 +45,24 @@ done
 mkdir -p "$OUT_DIR/logs"
 
 # ── Solver × NFE grid ─────────────────────────────────────────────────────────
-# Format: "SOLVER:NSTEPS"  NFE = NSTEPS for all solvers except UNIPC (NFE = 2×NSTEPS)
+# Format: "SOLVER:NSTEPS"
+# NFE=4 configs removed (degenerate frozen-price behaviour across all families).
+# UNIPC removed (degenerate at all step counts tested).
+# HYBRID_PP_DDIM: total NSTEPS = (NSTEPS-2) DPM-Solver++ steps + 2 deterministic DDIM tail steps.
 CONFIGS=(
-    # ── Fast ODE solvers (primary contribution) ──────────────────────────
-    "DPM_SOLVER_PP:4"
+    # ── DPM-Solver++ (primary fast ODE contribution) ─────────────────────
     "DPM_SOLVER_PP:8"
     "DPM_SOLVER_PP:10"
     "DPM_SOLVER_PP:20"
-    "DPM_SOLVER:4"
+    # ── Hybrid DPM-Solver++ + DDIM tail (2 DDIM steps appended) ──────────
+    "HYBRID_PP_DDIM:10"    # 8 PP + 2 DDIM
+    "HYBRID_PP_DDIM:12"    # 10 PP + 2 DDIM
+    "HYBRID_PP_DDIM:22"    # 20 PP + 2 DDIM
+    # ── DPM-Solver (ε-prediction baseline) ───────────────────────────────
     "DPM_SOLVER:8"
     "DPM_SOLVER:10"
     "DPM_SOLVER:20"
-    "UNIPC:2"
-    "UNIPC:4"
-    "UNIPC:5"
-    "UNIPC:10"
-    # ── Baselines (run last — DDIM is fast, DDPM is slow) ────────────────
-    "DDIM:5"
+    # ── Deterministic baselines ───────────────────────────────────────────
     "DDIM:10"
     "DDIM:20"
     "DDPM:100"   # nsteps ignored by DDPM — always runs all 100 diffusion steps
@@ -117,6 +118,7 @@ for CONFIG in "${CONFIGS[@]}"; do
     )
     [[ -n "$REAL_PATH"       ]] && SIM_ARGS+=(--real-data-path "$REAL_PATH")
     [[ -n "$CHECKPOINT_ID"   ]] && SIM_ARGS+=(-id "$CHECKPOINT_ID")
+    [[ "$SOLVER" == "HYBRID_PP_DDIM" ]] && SIM_ARGS+=(--tail-steps 2)
 
     # -- Sentinel: find generated CSV by mtime after sim finishes --
     SENTINEL=$(mktemp)
