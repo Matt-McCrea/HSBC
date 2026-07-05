@@ -42,13 +42,9 @@ class Order:
         self.tag = tag
 
     def generateOrderId(self):
-        # generates a unique order ID if the order ID is not specified
-        if not Order.order_id in Order._order_ids:
-            oid = Order.order_id
-        else:
+        while Order.order_id in Order._order_ids:
             Order.order_id += 1
-            oid = self.generateOrderId()
-        return oid
+        return Order.order_id
 
     def to_dict(self):
         as_dict = deepcopy(self).__dict__
