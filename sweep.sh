@@ -54,10 +54,10 @@ CONFIGS=(
     "DPM_SOLVER_PP:8"
     "DPM_SOLVER_PP:10"
     "DPM_SOLVER_PP:20"
-    # ── Hybrid DPM-Solver++ + DDIM tail (2 DDIM steps appended) ──────────
-    "HYBRID_PP_DDIM:10"    # 8 PP + 2 DDIM
-    "HYBRID_PP_DDIM:12"    # 10 PP + 2 DDIM
-    "HYBRID_PP_DDIM:22"    # 20 PP + 2 DDIM
+    # ── Hybrid DPM-Solver++ + DDPM tail (2 stochastic steps appended) ───
+    "HYBRID_PP_DDPM:10"    # 8 PP + 2 DDPM
+    "HYBRID_PP_DDPM:12"    # 10 PP + 2 DDPM
+    "HYBRID_PP_DDPM:22"    # 20 PP + 2 DDPM
     # ── DPM-Solver (ε-prediction baseline) ───────────────────────────────
     "DPM_SOLVER:8"
     "DPM_SOLVER:10"
@@ -118,7 +118,7 @@ for CONFIG in "${CONFIGS[@]}"; do
     )
     [[ -n "$REAL_PATH"       ]] && SIM_ARGS+=(--real-data-path "$REAL_PATH")
     [[ -n "$CHECKPOINT_ID"   ]] && SIM_ARGS+=(-id "$CHECKPOINT_ID")
-    [[ "$SOLVER" == "HYBRID_PP_DDIM" ]] && SIM_ARGS+=(--tail-steps 2)
+    [[ "$SOLVER" == "HYBRID_PP_DDIM" || "$SOLVER" == "HYBRID_PP_DDPM" ]] && SIM_ARGS+=(--tail-steps 2)
 
     # -- Sentinel: find generated CSV by mtime after sim finishes --
     SENTINEL=$(mktemp)
