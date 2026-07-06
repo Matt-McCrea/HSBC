@@ -47,6 +47,8 @@ class WorldAgent(Agent):
         self.model = model
         self.historical_orders, self.historical_lob = self._load_orders_lob(self.symbol, data_dir, self.date, date_trading_days)
         self.historical_order_ids = self.historical_orders[:, 2]
+        # Set form for O(1) membership checks (used to exempt replay-seeded orders from TTL).
+        self.historical_order_ids_set = set(self.historical_order_ids.tolist())
         self.unused_order_ids = np.setdiff1d(np.arange(0, 99999999), self.historical_order_ids)
         self.next_orders = None
         self.subscription_requested = False
@@ -615,14 +617,20 @@ class WorldAgent(Agent):
 
 
     def _expire_stale_orders(self, currentTime):
-        """Cancel own resting limit orders older than order_ttl (swept at most once per sim-second).
-        Only runs during the generation phase — the replay phase applies its own historical cancels."""
+        """Cancel model-generated resting limit orders older than order_ttl (swept at most once
+        per sim-second). Replay-seeded orders (order_id in historical_order_ids_set) are exempt:
+        they came from real historical data and are already realistic. Without this exemption,
+        the very first sweep at the replay->generation boundary would try to cancel the entire
+        15-minute replay book at once (thousands of orders, most already older than the TTL),
+        which is an O(n) exchange-side scan per cancel -> O(n^2) burst that looks like a freeze."""
         if self.order_ttl is None:
             return
         if self._last_ttl_sweep is not None and currentTime - self._last_ttl_sweep < pd.Timedelta(seconds=1):
             return
         self._last_ttl_sweep = currentTime
         for oid, order in list(self.active_limit_orders.items()):
+            if oid in self.historical_order_ids_set:
+                continue
             if currentTime - order.time_placed > self.order_ttl:
                 self.cancelOrder(order)
                 del self.active_limit_orders[oid]
