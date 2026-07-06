@@ -115,6 +115,12 @@ parser.add_argument('--tail-steps',
                     type=int,
                     default=2,
                     help='For HYBRID_PP_DDIM: number of DDIM steps appended after DPM-Solver++ steps')
+parser.add_argument('--guidance-scale',
+                    type=float,
+                    default=1.0,
+                    help='Classifier-free guidance weight (1.0 = off). w<1 blends toward the marginal '
+                         'distribution, w>1 sharpens conditioning. Requires a checkpoint trained with '
+                         'CONDITIONAL_DROPOUT > 0. Doubles NN evaluations per step when != 1.0.')
 parser.add_argument('--order-ttl',
                     type=float,
                     default=60.0,
@@ -258,6 +264,7 @@ if args.diffusion:
     config.HYPER_PARAMETERS[cst.LearningHyperParameter.DDIM_ETA] = args.ddim_eta
     config.HYPER_PARAMETERS[cst.LearningHyperParameter.DDIM_NSTEPS] = args.ddim_nsteps
     config.HYPER_PARAMETERS[cst.LearningHyperParameter.DDIM_TAIL_STEPS] = args.tail_steps
+    config.HYPER_PARAMETERS[cst.LearningHyperParameter.GUIDANCE_SCALE] = args.guidance_scale
     if config.CHOSEN_MODEL == cst.Models.TRADES:
         # load checkpoint
         model = DiffusionEngine.load_from_checkpoint(checkpoint_reference, config=config, map_location=cst.DEVICE)

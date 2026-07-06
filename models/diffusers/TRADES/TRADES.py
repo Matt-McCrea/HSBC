@@ -73,14 +73,11 @@ class TRADES(nn.Module):
         return noise, var
 
     def token_drop(self, cond_orders):
-        rand = random.random()
-        if rand < self.cond_dropout_prob:
-            # create a mask of zeros for the rows to drop
-            mask = torch.zeros((cond_orders.shape), device=cond_orders.device)
-            cond_orders = torch.einsum('bld, bld -> bld', cond_orders, mask)
-            return cond_orders
-        else:
-            # no tokens are dropped
-            return cond_orders 
-        
+        # Training only: with prob cond_dropout_prob, zero the order-history conditioning
+        # so the model learns an unconditional branch (enables classifier-free guidance).
+        # Never fires at inference — guided sampling zeroes cond_orders explicitly instead.
+        if self.training and random.random() < self.cond_dropout_prob:
+            return torch.zeros_like(cond_orders)
+        return cond_orders
+
  

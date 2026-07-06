@@ -32,6 +32,11 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
         self.cond_dropout_prob = config.HYPER_PARAMETERS[LearningHyperParameter.CONDITIONAL_DROPOUT]
         self.sampling_type = config.SAMPLING_TYPE
         self.IS_AUGMENTATION = config.IS_AUGMENTATION
+        # Classifier-free guidance weight. 1.0 = plain conditional sampling (no extra NFE).
+        # Values != 1.0 blend conditional and unconditional predictions; requires a
+        # checkpoint trained with CONDITIONAL_DROPOUT > 0. w < 1 pulls toward the marginal
+        # distribution, w > 1 sharpens conditioning. Doubles NN evaluations per step.
+        self.guidance_scale = config.HYPER_PARAMETERS.get(LearningHyperParameter.GUIDANCE_SCALE, 1.0)
         self.init_losses()
         self.cond_method = config.COND_METHOD
         if config.IS_AUGMENTATION:
@@ -106,10 +111,21 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
             main = self.ddim_nsteps - tail
             return self.hybrid_pp_ddpm_sample(x_0, real_cond_orders, real_cond_lob, main, tail)
 
+    def _forward_with_guidance(self, x_t_aug, cond_orders, ts, cond_lob):
+        """NN forward with optional classifier-free guidance.
+        The unconditional pass zeroes cond_orders (matching token_drop during training);
+        cond_lob is kept intact, as token_drop never touches it. Variance comes from the
+        conditional pass only."""
+        noise_pred, v = self.NN(x_t_aug, cond_orders, ts, cond_lob)
+        if self.guidance_scale != 1.0:
+            noise_uncond, _ = self.NN(x_t_aug, torch.zeros_like(cond_orders), ts, cond_lob)
+            noise_pred = noise_uncond + self.guidance_scale * (noise_pred - noise_uncond)
+        return noise_pred, v
+
     def _get_eps(self, x_t, ts, orig_cond_orders, orig_cond_lob):
         """Single denoiser call: augment → NN → deaugment. Returns predicted noise ε."""
         x_t_aug, cond_orders, cond_lob = self.augment(x_t, orig_cond_orders, orig_cond_lob)
-        noise_pred, v = self.NN(x_t_aug, cond_orders, ts, cond_lob)
+        noise_pred, v = self._forward_with_guidance(x_t_aug, cond_orders, ts, cond_lob)
         if self.IS_AUGMENTATION:
             noise_pred, v = self.deaugment(noise_pred, v)
         return noise_pred
@@ -387,7 +403,7 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
         return x_t
         
     def ddim_single_step(self, x_t_aug, cond_lob, cond_orders, ts, index, x_t):
-        noise_t, v = self.NN(x_t_aug, cond_orders, ts, cond_lob)
+        noise_t, v = self._forward_with_guidance(x_t_aug, cond_orders, ts, cond_lob)
         if self.IS_AUGMENTATION:
             noise_t, v = self.deaugment(noise_t, v)
         alpha = self.ddim_alpha[index]
@@ -446,7 +462,7 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
         alpha_t = repeat(alpha_t, 'b -> b l d', l=self.gen_seq_size, d=x_0.shape[-1])
         alpha_cumprod_t = repeat(alpha_cumprod_t, 'b -> b l d', l=self.gen_seq_size, d=x_0.shape[-1])
         # Get the noise and v outputs from the neural network for the current time step
-        noise_t, v = self.NN(x_t_aug, cond_orders, t, cond_lob)
+        noise_t, v = self._forward_with_guidance(x_t_aug, cond_orders, t, cond_lob)
         #noise_t = self.NN(x_t_aug, cond_orders, t, cond_lob)
         #check for nan in x_t_aug and cond and noise_t
         #if torch.isnan(v).any():

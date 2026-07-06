@@ -57,7 +57,10 @@ class Configuration:
         self.HYPER_PARAMETERS[LearningHyperParameter.SEQ_SIZE] = 256        #it's the sequencce length
         self.HYPER_PARAMETERS[LearningHyperParameter.MASKED_SEQ_SIZE] = 1      #it's the number of elements to be gen, so the events that we generate at a time
 
-        self.HYPER_PARAMETERS[LearningHyperParameter.CONDITIONAL_DROPOUT] = 0.0
+        # 0.1 enables classifier-free guidance: the model learns an unconditional branch
+        # (zeroed order-history conditioning), letting sampling blend conditional and
+        # marginal predictions via --guidance-scale.
+        self.HYPER_PARAMETERS[LearningHyperParameter.CONDITIONAL_DROPOUT] = 0.1
         self.HYPER_PARAMETERS[LearningHyperParameter.DROPOUT] = 0.1
         self.HYPER_PARAMETERS[LearningHyperParameter.NUM_DIFFUSIONSTEPS] = 100
         self.HYPER_PARAMETERS[LearningHyperParameter.SIZE_TYPE_EMB] = 3

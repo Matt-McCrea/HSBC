@@ -25,6 +25,7 @@ class LearningHyperParameter(str, Enum):
     DDIM_ETA = "ddim_eta"
     DDIM_NSTEPS = "ddim_nsteps"
     DDIM_TAIL_STEPS = "ddim_tail_steps"  # for HYBRID_PP_DDIM: number of DDIM steps at the end
+    GUIDANCE_SCALE = "guidance_scale"    # classifier-free guidance weight (1.0 = off; needs checkpoint trained with CONDITIONAL_DROPOUT > 0)
     ONE_HOT_ENCODING_TYPE = "one_hot_encoding_type"
     CSDI_SIDE_DIM = "CSDI_side_dim"
     CSDI_CHANNELS = "CSDI_channels"
