@@ -618,13 +618,24 @@ class WorldAgent(Agent):
 
 
     def _z_score_orderbook(self, orderbook):
+        # Use current mid-price as the price centering term so the model always sees
+        # the current price at z≈0, regardless of absolute price level.
+        # Training mean ($36.36) vs simulation seed price ($33.87) = −5.67σ mismatch;
+        # centering on mid eliminates that OOD offset entirely.
+        ask1_raw = orderbook[-1, 0]
+        bid1_raw = orderbook[-1, 2]
+        if ask1_raw > 0 and bid1_raw > 0:
+            current_mid_cents = (ask1_raw + bid1_raw) / 2.0 / 100.0
+        elif ask1_raw > 0:
+            current_mid_cents = ask1_raw / 100.0
+        elif bid1_raw > 0:
+            current_mid_cents = bid1_raw / 100.0
+        else:
+            current_mid_cents = self.normalization_terms["lob"][2]  # fallback when LOB empty
+
         orderbook[:, 0::2] = orderbook[:, 0::2] / 100
-        orderbook[:, 0::2] = (orderbook[:, 0::2] - self.normalization_terms["lob"][2]) / self.normalization_terms["lob"][3]
+        orderbook[:, 0::2] = (orderbook[:, 0::2] - current_mid_cents) / self.normalization_terms["lob"][3]
         orderbook[:, 1::2] = (orderbook[:, 1::2] - self.normalization_terms["lob"][0]) / self.normalization_terms["lob"][1]
-        # Clip to ±3σ: values outside this range were effectively never seen during training.
-        # Without clipping, a drifted simulated price (e.g. ask=41 vs training mean=33.87) produces
-        # z-scores of +14, causing OOD conditioning that amplifies the drift in a positive feedback loop.
-        np.clip(orderbook, -3.0, 3.0, out=orderbook)
         return orderbook
 
 
@@ -677,10 +688,22 @@ class WorldAgent(Agent):
         # divide all the price, both of lob and messages, by 100
         orders_dataframe["price"] = orders_dataframe["price"] / 100
 
+        # Center order prices on the current mid-price (same logic as _z_score_orderbook).
+        ask1_raw = lob_snapshots[-1, 0]
+        bid1_raw = lob_snapshots[-1, 2]
+        if ask1_raw > 0 and bid1_raw > 0:
+            current_mid_cents = (ask1_raw + bid1_raw) / 2.0 / 100.0
+        elif ask1_raw > 0:
+            current_mid_cents = ask1_raw / 100.0
+        elif bid1_raw > 0:
+            current_mid_cents = bid1_raw / 100.0
+        else:
+            current_mid_cents = self.normalization_terms["event"][2]  # fallback when LOB empty
+
         # apply z score to orders
         orders_dataframe, _, _, _, _, _, _, _, _ = normalize_messages(orders_dataframe,
                                                                     mean_size=self.normalization_terms["event"][0],
-                                                                    mean_prices=self.normalization_terms["event"][2],
+                                                                    mean_prices=current_mid_cents,
                                                                     std_size=self.normalization_terms["event"][1],
                                                                     std_prices=self.normalization_terms["event"][3],
                                                                     mean_time=self.normalization_terms["event"][4],
@@ -688,14 +711,8 @@ class WorldAgent(Agent):
                                                                     mean_depth=self.normalization_terms["event"][6],
                                                                     std_depth=self.normalization_terms["event"][7]
                                                                     )
-        
 
-        # Same OOD clipping as _z_score_orderbook: keeps conditioning in the training distribution
-        # even when simulated prices drift beyond the range seen during training.
-        return torch.clamp(
-            torch.from_numpy(orders_dataframe.to_numpy()).to(cst.DEVICE, torch.float32),
-            min=-3.0, max=3.0
-        )
+        return torch.from_numpy(orders_dataframe.to_numpy()).to(cst.DEVICE, torch.float32)
 
 
     def _load_orders_lob(self, symbol, data_dir, date, date_trading_days):
