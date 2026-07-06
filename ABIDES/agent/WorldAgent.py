@@ -28,9 +28,8 @@ class WorldAgent(Agent):
     # and generates new orders for the next time step
 
 
-    def __init__(self, id, name, type, symbol, date, date_trading_days, model, data_dir, log_orders=True, random_state=None, normalization_terms=None,
-                 using_diffusion=False, chosen_model=None, seq_len=256, cond_seq_size=255, cond_type='full', size_type_emb=3, gen_seq_size=1,
-                 order_ttl=None):
+    def __init__(self, id, name, type, symbol, date, date_trading_days, model, data_dir, log_orders=True, random_state=None, normalization_terms=None, 
+                 using_diffusion=False, chosen_model=None, seq_len=256, cond_seq_size=255, cond_type='full', size_type_emb=3, gen_seq_size=1):
 
         super().__init__(id, name, type, random_state=random_state, log_to_file=log_orders)
         self.count_neg_size = 0
@@ -47,8 +46,6 @@ class WorldAgent(Agent):
         self.model = model
         self.historical_orders, self.historical_lob = self._load_orders_lob(self.symbol, data_dir, self.date, date_trading_days)
         self.historical_order_ids = self.historical_orders[:, 2]
-        # Set form for O(1) membership checks (used to exempt replay-seeded orders from TTL).
-        self.historical_order_ids_set = set(self.historical_order_ids.tolist())
         self.unused_order_ids = np.setdiff1d(np.arange(0, 99999999), self.historical_order_ids)
         self.next_orders = None
         self.subscription_requested = False
@@ -72,12 +69,6 @@ class WorldAgent(Agent):
         self.depth_rounding = 0
         self.last_bid_price = 0
         self.last_ask_price = 0
-        # Liquidity recycling: resting limit orders older than order_ttl are cancelled during
-        # the generation phase. Compensates for the model under-generating cancels (32% vs 44%
-        # real), which otherwise builds immovable volume walls that freeze the mid-price.
-        self.order_ttl = pd.Timedelta(seconds=order_ttl) if order_ttl else None
-        self._last_ttl_sweep = None
-        self.ttl_cancelled_orders = 0
         self.using_diffusion = using_diffusion
         self.chosen_model = chosen_model
         if using_diffusion:
@@ -97,7 +88,6 @@ class WorldAgent(Agent):
         super().kernelTerminating()
         print("World Agent terminating.")
         print("World Agent ignored {} cancel orders".format(self.ignored_cancel))
-        print("World Agent TTL-cancelled {} stale orders".format(self.ttl_cancelled_orders))
 
     def requestDataSubscription(self, symbol, levels):
         self.sendMessage(recipientID=self.exchangeID,
@@ -157,7 +147,6 @@ class WorldAgent(Agent):
             
         elif currentTime > self.mkt_open + pd.Timedelta(self.starting_time_diffusion) and self.using_diffusion:
             self.state = 'GENERATING'
-            self._expire_stale_orders(currentTime)
             # we generate the first order then the others will be generated everytime we receive the update of the lob
             if self.first_generation:
                 if self.chosen_model == 'CGAN':        
@@ -616,26 +605,6 @@ class WorldAgent(Agent):
         return np.array([time, order_type, order_id, size, price, direction])
 
 
-    def _expire_stale_orders(self, currentTime):
-        """Cancel model-generated resting limit orders older than order_ttl (swept at most once
-        per sim-second). Replay-seeded orders (order_id in historical_order_ids_set) are exempt:
-        they came from real historical data and are already realistic. Without this exemption,
-        the very first sweep at the replay->generation boundary would try to cancel the entire
-        15-minute replay book at once (thousands of orders, most already older than the TTL),
-        which is an O(n) exchange-side scan per cancel -> O(n^2) burst that looks like a freeze."""
-        if self.order_ttl is None:
-            return
-        if self._last_ttl_sweep is not None and currentTime - self._last_ttl_sweep < pd.Timedelta(seconds=1):
-            return
-        self._last_ttl_sweep = currentTime
-        for oid, order in list(self.active_limit_orders.items()):
-            if oid in self.historical_order_ids_set:
-                continue
-            if currentTime - order.time_placed > self.order_ttl:
-                self.cancelOrder(order)
-                del self.active_limit_orders[oid]
-                self.ttl_cancelled_orders += 1
-
     def _update_active_limit_orders(self):
         asks = self.kernel.agents[0].order_books[self.symbol].asks
         bids = self.kernel.agents[0].order_books[self.symbol].bids
@@ -649,27 +618,9 @@ class WorldAgent(Agent):
 
 
     def _z_score_orderbook(self, orderbook):
-        # Use current mid-price as the price centering term so the model always sees
-        # the current price at z≈0, regardless of absolute price level.
-        # Training mean ($36.36) vs simulation seed price ($33.87) = −5.67σ mismatch;
-        # centering on mid eliminates that OOD offset entirely.
-        ask1_raw = orderbook[-1, 0]
-        bid1_raw = orderbook[-1, 2]
-        if ask1_raw > 0 and bid1_raw > 0:
-            current_mid_cents = (ask1_raw + bid1_raw) / 2.0 / 100.0
-        elif ask1_raw > 0:
-            current_mid_cents = ask1_raw / 100.0
-        elif bid1_raw > 0:
-            current_mid_cents = bid1_raw / 100.0
-        else:
-            current_mid_cents = self.normalization_terms["lob"][2]  # fallback when LOB empty
-
         orderbook[:, 0::2] = orderbook[:, 0::2] / 100
-        orderbook[:, 0::2] = (orderbook[:, 0::2] - current_mid_cents) / self.normalization_terms["lob"][3]
+        orderbook[:, 0::2] = (orderbook[:, 0::2] - self.normalization_terms["lob"][2]) / self.normalization_terms["lob"][3]
         orderbook[:, 1::2] = (orderbook[:, 1::2] - self.normalization_terms["lob"][0]) / self.normalization_terms["lob"][1]
-        # Safety net on volumes only: prices are in-distribution by construction (mid-centered),
-        # but a residual volume spike should not push conditioning wildly outside training range.
-        orderbook[:, 1::2] = np.clip(orderbook[:, 1::2], -5.0, 5.0)
         return orderbook
 
 
@@ -722,22 +673,10 @@ class WorldAgent(Agent):
         # divide all the price, both of lob and messages, by 100
         orders_dataframe["price"] = orders_dataframe["price"] / 100
 
-        # Center order prices on the current mid-price (same logic as _z_score_orderbook).
-        ask1_raw = lob_snapshots[-1, 0]
-        bid1_raw = lob_snapshots[-1, 2]
-        if ask1_raw > 0 and bid1_raw > 0:
-            current_mid_cents = (ask1_raw + bid1_raw) / 2.0 / 100.0
-        elif ask1_raw > 0:
-            current_mid_cents = ask1_raw / 100.0
-        elif bid1_raw > 0:
-            current_mid_cents = bid1_raw / 100.0
-        else:
-            current_mid_cents = self.normalization_terms["event"][2]  # fallback when LOB empty
-
         # apply z score to orders
         orders_dataframe, _, _, _, _, _, _, _, _ = normalize_messages(orders_dataframe,
                                                                     mean_size=self.normalization_terms["event"][0],
-                                                                    mean_prices=current_mid_cents,
+                                                                    mean_prices=self.normalization_terms["event"][2],
                                                                     std_size=self.normalization_terms["event"][1],
                                                                     std_prices=self.normalization_terms["event"][3],
                                                                     mean_time=self.normalization_terms["event"][4],
@@ -745,6 +684,7 @@ class WorldAgent(Agent):
                                                                     mean_depth=self.normalization_terms["event"][6],
                                                                     std_depth=self.normalization_terms["event"][7]
                                                                     )
+        
 
         return torch.from_numpy(orders_dataframe.to_numpy()).to(cst.DEVICE, torch.float32)
 
