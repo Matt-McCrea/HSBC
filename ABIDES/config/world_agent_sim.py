@@ -115,6 +115,11 @@ parser.add_argument('--tail-steps',
                     type=int,
                     default=2,
                     help='For HYBRID_PP_DDIM: number of DDIM steps appended after DPM-Solver++ steps')
+parser.add_argument('--order-ttl',
+                    type=float,
+                    default=60.0,
+                    help='Seconds a generated resting limit order may live before auto-cancel (0 = disabled). '
+                         'Compensates for the model under-generating cancels, which freezes the mid-price.')
 parser.add_argument('--real-data-path',
                     type=str,
                     default=None,
@@ -274,6 +279,7 @@ if args.diffusion:
                           using_diffusion=args.diffusion,
                             chosen_model=args.chosen_model,
                             gen_seq_size=config.HYPER_PARAMETERS[cst.LearningHyperParameter.MASKED_SEQ_SIZE],
+                            order_ttl=args.order_ttl if args.order_ttl > 0 else None,
                           )
                ])
     elif config.CHOSEN_MODEL == cst.Models.CGAN:
@@ -296,6 +302,7 @@ if args.diffusion:
                           using_diffusion=args.diffusion,
                             chosen_model=args.chosen_model,
                             seq_len=config.HYPER_PARAMETERS[cst.LearningHyperParameter.SEQ_SIZE],
+                            order_ttl=args.order_ttl if args.order_ttl > 0 else None,
                           )
                ])
             

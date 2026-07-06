@@ -28,8 +28,9 @@ class WorldAgent(Agent):
     # and generates new orders for the next time step
 
 
-    def __init__(self, id, name, type, symbol, date, date_trading_days, model, data_dir, log_orders=True, random_state=None, normalization_terms=None, 
-                 using_diffusion=False, chosen_model=None, seq_len=256, cond_seq_size=255, cond_type='full', size_type_emb=3, gen_seq_size=1):
+    def __init__(self, id, name, type, symbol, date, date_trading_days, model, data_dir, log_orders=True, random_state=None, normalization_terms=None,
+                 using_diffusion=False, chosen_model=None, seq_len=256, cond_seq_size=255, cond_type='full', size_type_emb=3, gen_seq_size=1,
+                 order_ttl=None):
 
         super().__init__(id, name, type, random_state=random_state, log_to_file=log_orders)
         self.count_neg_size = 0
@@ -69,6 +70,12 @@ class WorldAgent(Agent):
         self.depth_rounding = 0
         self.last_bid_price = 0
         self.last_ask_price = 0
+        # Liquidity recycling: resting limit orders older than order_ttl are cancelled during
+        # the generation phase. Compensates for the model under-generating cancels (32% vs 44%
+        # real), which otherwise builds immovable volume walls that freeze the mid-price.
+        self.order_ttl = pd.Timedelta(seconds=order_ttl) if order_ttl else None
+        self._last_ttl_sweep = None
+        self.ttl_cancelled_orders = 0
         self.using_diffusion = using_diffusion
         self.chosen_model = chosen_model
         if using_diffusion:
@@ -88,6 +95,7 @@ class WorldAgent(Agent):
         super().kernelTerminating()
         print("World Agent terminating.")
         print("World Agent ignored {} cancel orders".format(self.ignored_cancel))
+        print("World Agent TTL-cancelled {} stale orders".format(self.ttl_cancelled_orders))
 
     def requestDataSubscription(self, symbol, levels):
         self.sendMessage(recipientID=self.exchangeID,
@@ -147,6 +155,7 @@ class WorldAgent(Agent):
             
         elif currentTime > self.mkt_open + pd.Timedelta(self.starting_time_diffusion) and self.using_diffusion:
             self.state = 'GENERATING'
+            self._expire_stale_orders(currentTime)
             # we generate the first order then the others will be generated everytime we receive the update of the lob
             if self.first_generation:
                 if self.chosen_model == 'CGAN':        
@@ -605,6 +614,20 @@ class WorldAgent(Agent):
         return np.array([time, order_type, order_id, size, price, direction])
 
 
+    def _expire_stale_orders(self, currentTime):
+        """Cancel own resting limit orders older than order_ttl (swept at most once per sim-second).
+        Only runs during the generation phase — the replay phase applies its own historical cancels."""
+        if self.order_ttl is None:
+            return
+        if self._last_ttl_sweep is not None and currentTime - self._last_ttl_sweep < pd.Timedelta(seconds=1):
+            return
+        self._last_ttl_sweep = currentTime
+        for oid, order in list(self.active_limit_orders.items()):
+            if currentTime - order.time_placed > self.order_ttl:
+                self.cancelOrder(order)
+                del self.active_limit_orders[oid]
+                self.ttl_cancelled_orders += 1
+
     def _update_active_limit_orders(self):
         asks = self.kernel.agents[0].order_books[self.symbol].asks
         bids = self.kernel.agents[0].order_books[self.symbol].bids
@@ -636,6 +659,9 @@ class WorldAgent(Agent):
         orderbook[:, 0::2] = orderbook[:, 0::2] / 100
         orderbook[:, 0::2] = (orderbook[:, 0::2] - current_mid_cents) / self.normalization_terms["lob"][3]
         orderbook[:, 1::2] = (orderbook[:, 1::2] - self.normalization_terms["lob"][0]) / self.normalization_terms["lob"][1]
+        # Safety net on volumes only: prices are in-distribution by construction (mid-centered),
+        # but a residual volume spike should not push conditioning wildly outside training range.
+        orderbook[:, 1::2] = np.clip(orderbook[:, 1::2], -5.0, 5.0)
         return orderbook
 
 
