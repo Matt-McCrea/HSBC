@@ -90,6 +90,10 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
                 LearningHyperParameter.DDIM_TAIL_STEPS, 2)
             tmp = self.num_diffusionsteps / self.ddim_nsteps
             self.t = torch.arange(0, self.num_diffusionsteps, tmp).long() + 1
+            # When ddim_nsteps == num_diffusionsteps, the +1 pushes the last index to
+            # num_diffusionsteps (out of bounds for alphas_cumprod, valid 0..N-1) and the
+            # sampler crashes with IndexError. Clamp so the full-step schedule is runnable.
+            self.t = torch.clamp(self.t, max=self.num_diffusionsteps - 1)
             # ᾱ_t at each subsampled step and its predecessor (one step cleaner)
             self.ddim_alpha = self.alphas_cumprod[self.t].clone()
             self.ddim_alpha_sqrt = torch.sqrt(self.ddim_alpha)           # α_t = √ᾱ_t

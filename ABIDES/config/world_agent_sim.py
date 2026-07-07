@@ -129,8 +129,9 @@ parser.add_argument('--real-data-path',
 parser.add_argument('--fix-time', action='store_true',
                     help='H1: feed generated inter-arrival times back into the conditioning history '
                          '(fixes the frozen time channel during generation)')
-parser.add_argument('--type-decode', type=str, default='l1', choices=['l1', 'l2'],
-                    help='H2: distance metric for decoding the type embedding (l1 = original)')
+parser.add_argument('--type-decode', type=str, default='l1', choices=['l1', 'l2', 'prior'],
+                    help='H2: type-embedding decode: l1 (original), l2, or prior '
+                         '(Bayes prior-corrected — penalizes the geometrically oversized MARKET region)')
 parser.add_argument('--fix-cancel-bind', action='store_true',
                     help='H3: bind generated cancels to the nearest same-side resting order instead of '
                          'dropping them when no exact-price match exists')

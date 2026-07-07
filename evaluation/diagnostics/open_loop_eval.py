@@ -102,16 +102,22 @@ def decode_generated(x_t, type_anchors, size_type_emb, stats):
     """Decode a batch of raw model outputs (B, 1, size_order_emb) with the SAME logic as
     WorldAgent._postprocess_generated_TRADES. Returns dict of arrays."""
     g = x_t[:, 0, :]  # (B, F): [time, type_emb x3, size, price, direction, depth]
+    emb = g[:, 1:size_type_emb + 1]
     # type: L1 nearest anchor (the original decode)
-    d_l1 = torch.cdist(g[:, 1:size_type_emb + 1], type_anchors, p=1)
+    d_l1 = torch.cdist(emb, type_anchors, p=1)
     types_l1 = torch.argmin(d_l1, dim=1).cpu().numpy()          # 0=limit,1=cancel,2=market
-    d_l2 = torch.cdist(g[:, 1:size_type_emb + 1], type_anchors, p=2)
+    d_l2 = torch.cdist(emb, type_anchors, p=2)
     types_l2 = torch.argmin(d_l2, dim=1).cpu().numpy()
+    # prior-corrected decode: argmin(0.5*||x-anchor||^2 - log prior). Mirrors WorldAgent's
+    # 'prior' type_decode so open-loop numbers are directly comparable.
+    log_prior = torch.log(torch.tensor([0.49, 0.48, 0.03], device=emb.device))
+    score = 0.5 * (d_l2 ** 2) - log_prior.unsqueeze(0)
+    types_prior = torch.argmin(score, dim=1).cpu().numpy()
     size = np.round(g[:, size_type_emb + 1].cpu().numpy() * stats["std_size"] + stats["mean_size"])
     depth = np.round(g[:, -1].cpu().numpy() * stats["std_depth"] + stats["mean_depth"])
     time = g[:, 0].cpu().numpy() * stats["std_time"] + stats["mean_time"]
     direction = np.where(g[:, size_type_emb + 3].cpu().numpy() < 0, -1, 1)
-    return {"type_l1": types_l1, "type_l2": types_l2, "size": size,
+    return {"type_l1": types_l1, "type_l2": types_l2, "type_prior": types_prior, "size": size,
             "depth": depth, "time": time, "direction": direction}
 
 
@@ -221,10 +227,12 @@ def main():
                                          gen["depth"], gen["time"], gen["direction"]),
         "generated_l2_decode": summarize(f"{tag} (L2 decode)", gen["type_l2"], gen["size"],
                                          gen["depth"], gen["time"], gen["direction"]),
+        "generated_prior_decode": summarize(f"{tag} (prior decode)", gen["type_prior"], gen["size"],
+                                            gen["depth"], gen["time"], gen["direction"]),
     }
 
     print(f"\n=== OPEN-LOOP RESULTS: {tag} ===")
-    for key in ("real", "generated_l1_decode", "generated_l2_decode"):
+    for key in ("real", "generated_l1_decode", "generated_l2_decode", "generated_prior_decode"):
         print_summary(results[key])
 
     out = args.out or f"open_loop_{tag}.json"

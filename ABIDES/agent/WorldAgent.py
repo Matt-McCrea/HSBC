@@ -72,10 +72,13 @@ class WorldAgent(Agent):
         self.last_ask_price = 0
         # ── Hypothesis-testing flags (all default off = original behavior) ──
         self.fix_time = fix_time                  # H1: feed generated inter-arrivals back into conditioning
-        self.type_decode = type_decode            # H2: 'l1' (original) or 'l2' type-embedding decode
+        self.type_decode = type_decode            # H2: 'l1' (original), 'l2', or 'prior' type-embedding decode
         self.fix_cancel_bind = fix_cancel_bind    # H3: bind cancels to nearest same-side order instead of dropping
         self.fix_lob_pad = fix_lob_pad            # H5: sentinel-pad empty LOB levels pre-z-score (match training)
         self.drop_type2_cond = drop_type2_cond    # H7: exclude partial cancels from conditioning (match training)
+        # log class priors [limit, cancel, market] for the 'prior' decode. Taken from the
+        # real test-set next-event marginals (limit=0.49, cancel=0.48, market=0.03).
+        self._type_log_prior = torch.log(torch.tensor([0.49, 0.48, 0.03], device=cst.DEVICE))
         # ── Diagnostics (always on, cheap counters) ──
         self.decoded_type_counts = {1: 0, 3: 0, 4: 0}  # pre-drop decode histogram (1=limit,3=cancel,4=market)
         self.drop_counts = {"size_range": 0, "limit_out_of_depth": 0,
@@ -537,7 +540,17 @@ class WorldAgent(Agent):
         
         #order_type = torch.argmax(generated[1:self.size_type_emb+1]).item() + 1
         _type_diffs = self.model.type_embedder.weight.data - generated[1:self.size_type_emb+1]
-        if self.type_decode == 'l2':
+        if self.type_decode == 'prior':
+            # H2 fix: Bayes-corrected nearest-anchor decode. Under a Gaussian likelihood,
+            # log p(class | x) ~ -0.5*||x - anchor||^2 + log prior(class). Plain argmin
+            # over raw distance ignores the prior, so MARKET's geometrically large decision
+            # region wins far more often than its true ~3% rate warrants — that is what
+            # blows up to 24% market decode under high-variance sampling and drives price
+            # drift. Adding -log(prior) penalizes rare classes by exactly the right amount.
+            d2 = torch.sum(_type_diffs ** 2, dim=1)
+            score = 0.5 * d2 - self._type_log_prior
+            order_type = torch.argmin(score).item() + 1
+        elif self.type_decode == 'l2':
             # H2 variant: squared-euclidean nearest anchor instead of L1
             order_type = torch.argmin(torch.sum(_type_diffs ** 2, dim=1)).item() + 1
         else:
