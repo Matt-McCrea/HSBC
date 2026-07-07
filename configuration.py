@@ -53,6 +53,8 @@ class Configuration:
         self.HYPER_PARAMETERS[LearningHyperParameter.OPTIMIZER] = cst.Optimizers.ADAM.value
         self.HYPER_PARAMETERS[LearningHyperParameter.DDIM_ETA] = 0
         self.HYPER_PARAMETERS[LearningHyperParameter.DDIM_NSTEPS] = 10
+        self.HYPER_PARAMETERS[LearningHyperParameter.DDIM_TAIL_STEPS] = 2
+        self.HYPER_PARAMETERS[LearningHyperParameter.GUIDANCE_SCALE] = 1.0  # 1.0 = off (no CFG)
         
         self.HYPER_PARAMETERS[LearningHyperParameter.SEQ_SIZE] = 256        #it's the sequencce length
         self.HYPER_PARAMETERS[LearningHyperParameter.MASKED_SEQ_SIZE] = 1      #it's the number of elements to be gen, so the events that we generate at a time

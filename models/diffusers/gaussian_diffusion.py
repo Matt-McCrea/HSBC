@@ -36,7 +36,12 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
         # Values != 1.0 blend conditional and unconditional predictions; requires a
         # checkpoint trained with CONDITIONAL_DROPOUT > 0. w < 1 pulls toward the marginal
         # distribution, w > 1 sharpens conditioning. Doubles NN evaluations per step.
-        self.guidance_scale = config.HYPER_PARAMETERS.get(LearningHyperParameter.GUIDANCE_SCALE, 1.0)
+        # configuration.py pre-populates HYPER_PARAMETERS with every enum member set to
+        # None, so a plain .get(key, 1.0) only helps if the key is absent entirely — it
+        # still returns None if the key exists but was never assigned a real value. Guard
+        # against both cases explicitly.
+        _guidance_scale = config.HYPER_PARAMETERS.get(LearningHyperParameter.GUIDANCE_SCALE)
+        self.guidance_scale = _guidance_scale if _guidance_scale is not None else 1.0
         self.init_losses()
         self.cond_method = config.COND_METHOD
         if config.IS_AUGMENTATION:
