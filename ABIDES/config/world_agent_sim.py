@@ -399,14 +399,34 @@ tmp = datetime.strptime(str(mkt_close), "%Y-%m-%d %H:%M:%S")
 date = tmp.date()
 time_mkt_close = str(tmp.time()).replace(':', '-')
 
+# Distinguishing suffix for the hypothesis-testing flags: without this, two runs that
+# only differ by --fix-time / --type-decode / etc. (same sampler, eta, nsteps, date,
+# window, checkpoint) produce the IDENTICAL log_dir name and silently overwrite each
+# other's processed_orders.csv. Empty string when no flags are set, so unaffected runs
+# keep their original directory names.
+_flag_suffix = ""
+if args.diffusion:
+    if args.fix_time:
+        _flag_suffix += "_ft"
+    if args.type_decode != "l1":
+        _flag_suffix += "_td" + args.type_decode
+    if args.fix_cancel_bind:
+        _flag_suffix += "_fcb"
+    if args.fix_lob_pad:
+        _flag_suffix += "_flp"
+    if args.drop_type2_cond:
+        _flag_suffix += "_dt2"
+    if args.guidance_scale != 1.0:
+        _flag_suffix += "_gs{}".format(args.guidance_scale)
+
 if trade_pov:
     if args.diffusion:
-        log_dir = "world_agent_{}_{}_{}_pov_{}_{}_{}_{}_{}_".format(symbol, date, time_mkt_close, pov_proportion_of_volume, seed, args.sampling_type, args.ddim_eta, args.ddim_nsteps) + checkpoint_reference.name[:13] 
+        log_dir = "world_agent_{}_{}_{}_pov_{}_{}_{}_{}_{}_".format(symbol, date, time_mkt_close, pov_proportion_of_volume, seed, args.sampling_type, args.ddim_eta, args.ddim_nsteps) + checkpoint_reference.name[:13] + _flag_suffix
     else:
         log_dir = "market_replay_{}_{}_{}_pov_{}_{}".format(symbol, date, time_mkt_close, pov_proportion_of_volume, seed)
 else:
     if args.diffusion:
-        log_dir = "world_agent_{}_{}_{}_{}_{}_{}_{}_".format(symbol, date, time_mkt_close, seed, args.sampling_type, args.ddim_eta, args.ddim_nsteps) + checkpoint_reference.name[:13]
+        log_dir = "world_agent_{}_{}_{}_{}_{}_{}_{}_".format(symbol, date, time_mkt_close, seed, args.sampling_type, args.ddim_eta, args.ddim_nsteps) + checkpoint_reference.name[:13] + _flag_suffix
     else:
         log_dir = "market_replay_{}_{}_{}_{}".format(symbol, date, time_mkt_close, seed)
 
