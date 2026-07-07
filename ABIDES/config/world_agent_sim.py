@@ -125,6 +125,19 @@ parser.add_argument('--real-data-path',
                     type=str,
                     default=None,
                     help='Path to real market-replay processed_orders.csv for KL divergence report')
+# ── Hypothesis-testing flags (all default off = original behavior) ──────────────
+parser.add_argument('--fix-time', action='store_true',
+                    help='H1: feed generated inter-arrival times back into the conditioning history '
+                         '(fixes the frozen time channel during generation)')
+parser.add_argument('--type-decode', type=str, default='l1', choices=['l1', 'l2'],
+                    help='H2: distance metric for decoding the type embedding (l1 = original)')
+parser.add_argument('--fix-cancel-bind', action='store_true',
+                    help='H3: bind generated cancels to the nearest same-side resting order instead of '
+                         'dropping them when no exact-price match exists')
+parser.add_argument('--fix-lob-pad', action='store_true',
+                    help='H5: pad empty LOB levels with LOBSTER sentinels before z-scoring (match training)')
+parser.add_argument('--drop-type2-cond', action='store_true',
+                    help='H7: exclude type-2 partial cancels from the conditioning history (match training)')
 
 args, remaining_args = parser.parse_known_args()
 
@@ -281,6 +294,11 @@ if args.diffusion:
                           using_diffusion=args.diffusion,
                             chosen_model=args.chosen_model,
                             gen_seq_size=config.HYPER_PARAMETERS[cst.LearningHyperParameter.MASKED_SEQ_SIZE],
+                            fix_time=args.fix_time,
+                            type_decode=args.type_decode,
+                            fix_cancel_bind=args.fix_cancel_bind,
+                            fix_lob_pad=args.fix_lob_pad,
+                            drop_type2_cond=args.drop_type2_cond,
                           )
                ])
     elif config.CHOSEN_MODEL == cst.Models.CGAN:

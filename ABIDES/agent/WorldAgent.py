@@ -28,8 +28,9 @@ class WorldAgent(Agent):
     # and generates new orders for the next time step
 
 
-    def __init__(self, id, name, type, symbol, date, date_trading_days, model, data_dir, log_orders=True, random_state=None, normalization_terms=None, 
-                 using_diffusion=False, chosen_model=None, seq_len=256, cond_seq_size=255, cond_type='full', size_type_emb=3, gen_seq_size=1):
+    def __init__(self, id, name, type, symbol, date, date_trading_days, model, data_dir, log_orders=True, random_state=None, normalization_terms=None,
+                 using_diffusion=False, chosen_model=None, seq_len=256, cond_seq_size=255, cond_type='full', size_type_emb=3, gen_seq_size=1,
+                 fix_time=False, type_decode='l1', fix_cancel_bind=False, fix_lob_pad=False, drop_type2_cond=False):
 
         super().__init__(id, name, type, random_state=random_state, log_to_file=log_orders)
         self.count_neg_size = 0
@@ -69,6 +70,19 @@ class WorldAgent(Agent):
         self.depth_rounding = 0
         self.last_bid_price = 0
         self.last_ask_price = 0
+        # ── Hypothesis-testing flags (all default off = original behavior) ──
+        self.fix_time = fix_time                  # H1: feed generated inter-arrivals back into conditioning
+        self.type_decode = type_decode            # H2: 'l1' (original) or 'l2' type-embedding decode
+        self.fix_cancel_bind = fix_cancel_bind    # H3: bind cancels to nearest same-side order instead of dropping
+        self.fix_lob_pad = fix_lob_pad            # H5: sentinel-pad empty LOB levels pre-z-score (match training)
+        self.drop_type2_cond = drop_type2_cond    # H7: exclude partial cancels from conditioning (match training)
+        # ── Diagnostics (always on, cheap counters) ──
+        self.decoded_type_counts = {1: 0, 3: 0, 4: 0}  # pre-drop decode histogram (1=limit,3=cancel,4=market)
+        self.drop_counts = {"size_range": 0, "limit_out_of_depth": 0,
+                            "cancel_no_best": 0, "cancel_side_empty": 0}
+        self.resample_total_batches = 0
+        self.resample_extra_batches = 0
+        self.cond_stats = {}                      # per-feature [min, max, sum, count] of z-scored conditioning
         self.using_diffusion = using_diffusion
         self.chosen_model = chosen_model
         if using_diffusion:
@@ -88,6 +102,22 @@ class WorldAgent(Agent):
         super().kernelTerminating()
         print("World Agent terminating.")
         print("World Agent ignored {} cancel orders".format(self.ignored_cancel))
+        print("=== WORLDAGENT DIAGNOSTICS ===")
+        print("DIAG decoded_pre_drop: limit={} cancel={} market={}".format(
+            self.decoded_type_counts[1], self.decoded_type_counts[3], self.decoded_type_counts[4]))
+        print("DIAG placed: limit={} cancel={} market={}".format(
+            self.diff_limit_order_placed, self.diff_cancel_order_placed, self.diff_market_order_placed))
+        print("DIAG drops: size_range={} limit_out_of_depth={} cancel_no_best={} cancel_side_empty={}".format(
+            self.drop_counts["size_range"], self.drop_counts["limit_out_of_depth"],
+            self.drop_counts["cancel_no_best"], self.drop_counts["cancel_side_empty"]))
+        print("DIAG cancel_empty_depth_fallbacks={} ignored_cancel_at_place={}".format(
+            self.generated_cancel_orders_empty_depth, self.ignored_cancel))
+        print("DIAG resample: total_batches={} extra_batches={}".format(
+            self.resample_total_batches, self.resample_extra_batches))
+        for feat, s in sorted(self.cond_stats.items()):
+            mean = s[2] / s[3] if s[3] else float("nan")
+            print("DIAG cond_z[{}]: min={:.2f} mean={:.2f} max={:.2f} n={}".format(feat, s[0], mean, s[1], s[3]))
+        print("=== END DIAGNOSTICS ===")
 
     def requestDataSubscription(self, symbol, levels):
         self.sendMessage(recipientID=self.exchangeID,
@@ -168,6 +198,12 @@ class WorldAgent(Agent):
             # exchange responses (ORDER_ACCEPTED etc.) are delivered via receiveMessage before
             # the next wakeup fires, so waiting is unnecessary and was causing quadratic slowdown.
             if len(self.next_orders) > 0:
+                if self.fix_time:
+                    # H1: stamp the conditioning history with this order's generated
+                    # inter-arrival. Without this, last_offset_time keeps the final
+                    # historical order's gap forever and the time channel of the
+                    # conditioning is a frozen constant during generation.
+                    self.last_offset_time = self.next_orders[0][0]
                 self.placeOrder(currentTime, self.next_orders[0])
                 offset_time = datetime.timedelta(seconds=self.next_orders[0][0])
                 self.next_orders = self.next_orders[1:]
@@ -246,9 +282,13 @@ class WorldAgent(Agent):
                         tag=None
                     )
                     self.modifyOrder(old_order, new_order)
-                    self.placed_orders.append(np.array([order[0], 2, new_order.order_id, quantity, new_order.limit_price, direction]))
-                    if len(self.placed_orders) > self.seq_len * 2:
-                        self.placed_orders = self.placed_orders[-self.seq_len * 2:]
+                    # H7: training data drops ALL type-2 (partial cancel) rows before
+                    # windowing, so conditioning windows never contained them. With the
+                    # flag on, keep them out of the sim conditioning history too.
+                    if not self.drop_type2_cond:
+                        self.placed_orders.append(np.array([order[0], 2, new_order.order_id, quantity, new_order.limit_price, direction]))
+                        if len(self.placed_orders) > self.seq_len * 2:
+                            self.placed_orders = self.placed_orders[-self.seq_len * 2:]
 
             elif type == 4:
                 # if type == 4 it means that it is an execution order, so if it is an execution order of a sell limit order
@@ -265,7 +305,13 @@ class WorldAgent(Agent):
     def _generate_order(self, currentTime):
         generated = None
         post_processed_orders = []
+        attempts = 0
         while len(post_processed_orders) == 0:
+            attempts += 1
+            self.resample_total_batches += 1
+            if attempts > 1:
+                # entire previous batch was dropped by postprocess filters — resampling
+                self.resample_extra_batches += 1
             if self.chosen_model == 'TRADES':
                 if self.cond_type == 'full':
                     orders = np.array(self.placed_orders[-self.cond_seq_size:])
@@ -490,14 +536,19 @@ class WorldAgent(Agent):
             direction = 1
         
         #order_type = torch.argmax(generated[1:self.size_type_emb+1]).item() + 1
-        order_type = torch.argmin(torch.sum(torch.abs(self.model.type_embedder.weight.data - generated[1:self.size_type_emb+1]), dim=1)).item()+1
-        #print(order_type)
+        _type_diffs = self.model.type_embedder.weight.data - generated[1:self.size_type_emb+1]
+        if self.type_decode == 'l2':
+            # H2 variant: squared-euclidean nearest anchor instead of L1
+            order_type = torch.argmin(torch.sum(_type_diffs ** 2, dim=1)).item() + 1
+        else:
+            order_type = torch.argmin(torch.sum(torch.abs(_type_diffs), dim=1)).item() + 1
 
         if order_type == 3 or order_type == 2:
             order_type += 1
         # order type == 1 -> limit order
         # order type == 3 -> cancel order
         # order type == 4 -> market order
+        self.decoded_type_counts[order_type] += 1  # pre-drop histogram (model's raw intent)
 
         # we return the size and the time to the original scale
         size = round(generated[self.size_type_emb+1].item() * self.normalization_terms["event"][1] + self.normalization_terms["event"][0], ndigits=0)
@@ -507,6 +558,7 @@ class WorldAgent(Agent):
         # if the price or the size are negative we return None and we generate another order
         if size < 0 or size > 1000:
             self.count_neg_size += 1
+            self.drop_counts["size_range"] += 1
             return None
         
         # if the time is negative we approximate to 1 microsecond
@@ -523,12 +575,13 @@ class WorldAgent(Agent):
                     bid_price = self.last_bid_price
                 else:
                     self.last_bid_price = bid_price
-                last_price = bid_side[-1] 
+                last_price = bid_side[-1]
                 price = bid_price - depth*100
                 # if the first 10 levels are full and the price is less than the last price we generate another order
                 # because we consider only the first 10 levels
                 if price < last_price and last_price > 0:
                     self.generated_orders_out_of_depth += 1
+                    self.drop_counts["limit_out_of_depth"] += 1
                     return None
                 self.diff_limit_order_placed += 1
             else:
@@ -542,6 +595,7 @@ class WorldAgent(Agent):
                 price = ask_price + depth*100
                 if price > last_price and last_price > 0:
                     self.generated_orders_out_of_depth += 1
+                    self.drop_counts["limit_out_of_depth"] += 1
                     return None
                 self.diff_limit_order_placed += 1
 
@@ -550,46 +604,68 @@ class WorldAgent(Agent):
                 bid_side = self.lob_snapshots[-1][2::4]
                 bid_price = bid_side[0]
                 if bid_price == 0:
+                    self.drop_counts["cancel_no_best"] += 1
                     return None
                 else:
                     self.last_bid_price = bid_price
                 price = bid_price - depth*100
-                # search all the active limit orders with the same price
-                orders_with_same_price = [order for order in self.active_limit_orders.values() if order.limit_price == price]
-                # if there are no orders with the same price then we generate another order
-                if len(orders_with_same_price) == 0:
-                    self.generated_cancel_orders_empty_depth += 1
-                    #chech if there are buy limit orders active
-                    if len([order for order in self.active_limit_orders.values() if order.is_buy_order]) == 0:
+                if self.fix_cancel_bind:
+                    # H3: always bind to the nearest same-side resting order; only drop
+                    # when the side is truly empty. Original behavior drops far more often.
+                    same_side = [o for o in self.active_limit_orders.values() if o.is_buy_order]
+                    if len(same_side) == 0:
+                        self.drop_counts["cancel_side_empty"] += 1
                         return None
-                    # find the order with the closest price and quantity
-                    order_id = min(self.active_limit_orders.values(), key=lambda x: (abs(x.limit_price - price), abs(x.quantity - size))).order_id
-                else:
-                    # we select the order with the quantity closer to the quantity generated
-                    order_id = min(orders_with_same_price, key=lambda x: abs(x.quantity - size)).order_id
+                    order_id = min(same_side, key=lambda x: (abs(x.limit_price - price), abs(x.quantity - size))).order_id
                     self.diff_cancel_order_placed += 1
+                else:
+                    # search all the active limit orders with the same price
+                    orders_with_same_price = [order for order in self.active_limit_orders.values() if order.limit_price == price]
+                    # if there are no orders with the same price then we generate another order
+                    if len(orders_with_same_price) == 0:
+                        self.generated_cancel_orders_empty_depth += 1
+                        #chech if there are buy limit orders active
+                        if len([order for order in self.active_limit_orders.values() if order.is_buy_order]) == 0:
+                            self.drop_counts["cancel_side_empty"] += 1
+                            return None
+                        # find the order with the closest price and quantity
+                        order_id = min(self.active_limit_orders.values(), key=lambda x: (abs(x.limit_price - price), abs(x.quantity - size))).order_id
+                    else:
+                        # we select the order with the quantity closer to the quantity generated
+                        order_id = min(orders_with_same_price, key=lambda x: abs(x.quantity - size)).order_id
+                        self.diff_cancel_order_placed += 1
 
             else:
                 ask_side = self.lob_snapshots[-1][0::4]
                 ask_price = ask_side[0]
                 if ask_price == 0:
+                    self.drop_counts["cancel_no_best"] += 1
                     return None
                 else:
                     self.last_ask_price = ask_price
                 price = ask_price + depth*100
-                # search all the active limit orders in the same level
-                orders_with_same_price = [order for order in self.active_limit_orders.values() if order.limit_price == price]
-                # if there are no orders with the same price then we generate another order
-                if len(orders_with_same_price) == 0:
-                    self.generated_cancel_orders_empty_depth += 1
-                    #chech if there are sell limit orders active
-                    if len([order for order in self.active_limit_orders.values() if not order.is_buy_order]) == 0:
+                if self.fix_cancel_bind:
+                    same_side = [o for o in self.active_limit_orders.values() if not o.is_buy_order]
+                    if len(same_side) == 0:
+                        self.drop_counts["cancel_side_empty"] += 1
                         return None
-                    order_id = min(self.active_limit_orders.values(), key=lambda x: (abs(x.limit_price - price), abs(x.quantity - size))).order_id
-                else:
-                    # we select the order with the quantity near to the quantity generated
-                    order_id = min(orders_with_same_price, key=lambda x: abs(x.quantity - size)).order_id
+                    order_id = min(same_side, key=lambda x: (abs(x.limit_price - price), abs(x.quantity - size))).order_id
                     self.diff_cancel_order_placed += 1
+                else:
+                    # search all the active limit orders in the same level
+                    orders_with_same_price = [order for order in self.active_limit_orders.values() if order.limit_price == price]
+                    # if there are no orders with the same price then we generate another order
+                    if len(orders_with_same_price) == 0:
+                        self.generated_cancel_orders_empty_depth += 1
+                        #chech if there are sell limit orders active
+                        if len([order for order in self.active_limit_orders.values() if not order.is_buy_order]) == 0:
+                            self.drop_counts["cancel_side_empty"] += 1
+                            return None
+                        order_id = min(self.active_limit_orders.values(), key=lambda x: (abs(x.limit_price - price), abs(x.quantity - size))).order_id
+                    else:
+                        # we select the order with the quantity near to the quantity generated
+                        order_id = min(orders_with_same_price, key=lambda x: abs(x.quantity - size)).order_id
+                        self.diff_cancel_order_placed += 1
 
         elif order_type == 4:
             self.diff_market_order_placed += 1
@@ -618,6 +694,16 @@ class WorldAgent(Agent):
 
 
     def _z_score_orderbook(self, orderbook):
+        if self.fix_lob_pad:
+            # H5: training data keeps LOBSTER sentinel prices (+/-9999999999) for missing
+            # levels; the sim pads them with 0, which z-scores to a completely different
+            # value. Restore the training convention before normalization. Operates on the
+            # fresh np.array copy made at the call site, never the stored snapshots
+            # (price-reconstruction code relies on `== 0` checks there).
+            ask_prices = orderbook[:, 0::4]
+            ask_prices[ask_prices == 0] = 9999999999
+            bid_prices = orderbook[:, 2::4]
+            bid_prices[bid_prices == 0] = -9999999999
         orderbook[:, 0::2] = orderbook[:, 0::2] / 100
         orderbook[:, 0::2] = (orderbook[:, 0::2] - self.normalization_terms["lob"][2]) / self.normalization_terms["lob"][3]
         orderbook[:, 1::2] = (orderbook[:, 1::2] - self.normalization_terms["lob"][0]) / self.normalization_terms["lob"][1]
@@ -684,7 +770,18 @@ class WorldAgent(Agent):
                                                                     mean_depth=self.normalization_terms["event"][6],
                                                                     std_depth=self.normalization_terms["event"][7]
                                                                     )
-        
+
+        # Diagnostics: running min/mean/max of the z-scored conditioning channels, so
+        # OOD conditioning is visible in the end-of-run report without extra tooling.
+        for col in ("time", "size", "price", "depth"):
+            if col in orders_dataframe.columns:
+                v = orders_dataframe[col].to_numpy(dtype=float)
+                if len(v):
+                    s = self.cond_stats.setdefault(col, [float("inf"), float("-inf"), 0.0, 0])
+                    s[0] = min(s[0], float(v.min()))
+                    s[1] = max(s[1], float(v.max()))
+                    s[2] += float(v.sum())
+                    s[3] += len(v)
 
         return torch.from_numpy(orders_dataframe.to_numpy()).to(cst.DEVICE, torch.float32)
 
