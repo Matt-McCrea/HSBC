@@ -83,7 +83,7 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
         self._t_step  = 0.0   # seconds in NN forward + reconstruction
         self._n_calls = 0     # number of sample() calls (= orders generated)
 
-        if self.sampling_type in ("DDIM", "DPM_SOLVER", "DPM_SOLVER_PP", "UNIPC", "HYBRID_PP_DDIM", "HYBRID_PP_DDPM"):
+        if self.sampling_type in ("DDIM", "DPM_SOLVER", "DPM_SOLVER_PP", "UNIPC", "HYBRID_PP_DDIM", "HYBRID_PP_DDPM", "HYBRID_DDPM_PP"):
             self.ddim_eta = config.HYPER_PARAMETERS[LearningHyperParameter.DDIM_ETA]
             self.ddim_nsteps = config.HYPER_PARAMETERS[LearningHyperParameter.DDIM_NSTEPS]
             self._hybrid_tail_steps = config.HYPER_PARAMETERS.get(
@@ -119,6 +119,12 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
             tail = getattr(self, "_hybrid_tail_steps", 2)
             main = self.ddim_nsteps - tail
             return self.hybrid_pp_ddpm_sample(x_0, real_cond_orders, real_cond_lob, main, tail)
+        elif self.sampling_type == "HYBRID_DDPM_PP":
+            # inverse of HYBRID_PP_DDPM: stochastic DDPM head, deterministic PP tail.
+            # --tail-steps sets the PP tail size; DDPM head takes the rest.
+            tail = getattr(self, "_hybrid_tail_steps", 2)
+            head = self.ddim_nsteps - tail
+            return self.hybrid_ddpm_pp_sample(x_0, real_cond_orders, real_cond_lob, head, tail)
 
     def _forward_with_guidance(self, x_t_aug, cond_orders, ts, cond_lob):
         """NN forward with optional classifier-free guidance.
@@ -318,6 +324,70 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
             dir_xt = (1.0 - alpha_prev - sigma_sq).clamp(min=0.0).sqrt() * eps
             noise = torch.randn_like(x_t) if step > 1 else torch.zeros_like(x_t)
             x_t = (alpha_prev ** 0.5) * pred_x0 + dir_xt + sigma * noise
+            if torch.cuda.is_available(): torch.cuda.synchronize()
+            t_aug += _t1 - _t0; t_step += time.perf_counter() - _t1
+
+        self._t_aug += t_aug; self._t_step += t_step; self._n_calls += 1
+        return x_t
+
+    def hybrid_ddpm_pp_sample(self, x_0, cond_orders, cond_lob, num_ddpm_steps, num_pp_steps):
+        """Stochastic HEAD, deterministic tail: DDPM posterior for the first num_ddpm_steps
+        (high noise), then DPM-Solver++ for the remaining num_pp_steps (low noise).
+
+        Tests whether the marketable (negative-depth) order tail — the flow that drives
+        executions and price movement — is established in the EARLY high-noise steps.
+        The inverse hybrid (HYBRID_PP_DDPM: fast head, stochastic tail) froze, suggesting a
+        stochastic tail cannot recover diversity the deterministic head already collapsed.
+        If this ordering moves the market at low total NFE, the tail is set early and this is
+        a viable fast sampler; if it still freezes, the diversity needs many stochastic steps."""
+        orig_cond_orders = cond_orders.detach().clone()
+        orig_cond_lob = cond_lob.detach().clone() if cond_lob is not None else None
+        tmp = torch.full((x_0.shape[0],), self.num_diffusionsteps - 1, device=cst.DEVICE, dtype=torch.int64)
+        x_t, _ = self.forward_reparametrized(x_0, tmp)
+        time_steps = torch.flip(self.t, dims=(0,))
+        t_aug, t_step = 0.0, 0.0
+
+        # ── Phase 1: DDPM posterior (high noise, stochastic) ──────────────────
+        for i, step in enumerate(time_steps[:num_ddpm_steps]):
+            _t0 = time.perf_counter()
+            index = len(time_steps) - i - 1
+            alpha      = self.ddim_alpha[index]
+            alpha_prev = self.ddim_alpha_prev[index]
+            sqrt_one_minus_alpha = self.ddim_sqrt_one_minus_alpha[index]
+            ts = x_t.new_full((x_0.shape[0],), step, dtype=torch.long)
+            _t1 = time.perf_counter()
+            eps = self._get_eps(x_t, ts, orig_cond_orders, orig_cond_lob)
+            pred_x0 = (x_t - sqrt_one_minus_alpha * eps) / (alpha ** 0.5)
+            sigma_sq = ((1.0 - alpha_prev) / (1.0 - alpha) * (1.0 - alpha / alpha_prev)).clamp(min=0.0)
+            sigma = sigma_sq.sqrt()
+            dir_xt = (1.0 - alpha_prev - sigma_sq).clamp(min=0.0).sqrt() * eps
+            noise = torch.randn_like(x_t) if step > 1 else torch.zeros_like(x_t)
+            x_t = (alpha_prev ** 0.5) * pred_x0 + dir_xt + sigma * noise
+            if torch.cuda.is_available(): torch.cuda.synchronize()
+            t_aug += _t1 - _t0; t_step += time.perf_counter() - _t1
+
+        # ── Phase 2: DPM-Solver++ (low noise, deterministic). PP multistep state
+        #    starts fresh at the handover — only x_t carries over. ──────────────
+        x0_prev, h_prev = None, None
+        for i_tail, step in enumerate(time_steps[num_ddpm_steps:]):
+            i = num_ddpm_steps + i_tail
+            _t0 = time.perf_counter()
+            index = len(time_steps) - i - 1
+            alpha_t  = self.ddim_alpha_sqrt[index]
+            sigma_t  = self.ddim_sqrt_one_minus_alpha[index]
+            alpha_s  = torch.sqrt(self.ddim_alpha_prev[index])
+            sigma_s  = torch.sqrt(1.0 - self.ddim_alpha_prev[index])
+            lambda_t = torch.log(alpha_t) - torch.log(sigma_t)
+            lambda_s = torch.log(alpha_s) - torch.log(sigma_s)
+            h = lambda_s - lambda_t
+            ts = x_t.new_full((x_0.shape[0],), step, dtype=torch.long)
+            _t1 = time.perf_counter()
+            eps   = self._get_eps(x_t, ts, orig_cond_orders, orig_cond_lob)
+            x0hat = (x_t - sigma_t * eps) / alpha_t
+            D = ((1.0 + 0.5 / (h_prev / h)) * x0hat - (0.5 / (h_prev / h)) * x0_prev
+                 if x0_prev is not None else x0hat)
+            x_t = (sigma_s / sigma_t) * x_t + alpha_s * (-torch.expm1(-h)) * D
+            x0_prev, h_prev = x0hat, h
             if torch.cuda.is_available(): torch.cuda.synchronize()
             t_aug += _t1 - _t0; t_step += time.perf_counter() - _t1
 
