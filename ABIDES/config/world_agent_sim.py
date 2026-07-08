@@ -139,6 +139,10 @@ parser.add_argument('--fix-lob-pad', action='store_true',
                     help='H5: pad empty LOB levels with LOBSTER sentinels before z-scoring (match training)')
 parser.add_argument('--drop-type2-cond', action='store_true',
                     help='H7: exclude type-2 partial cancels from the conditioning history (match training)')
+parser.add_argument('--depth-temp', type=float, default=1.0,
+                    help='Scale the decoded depth z-score by this factor (1.0 = off). kappa>1 widens the '
+                         'depth distribution so some orders spill into negative (marketable) depth, '
+                         'restoring the execution-driving tail that deterministic few-step sampling collapses.')
 
 args, remaining_args = parser.parse_known_args()
 
@@ -300,6 +304,7 @@ if args.diffusion:
                             fix_cancel_bind=args.fix_cancel_bind,
                             fix_lob_pad=args.fix_lob_pad,
                             drop_type2_cond=args.drop_type2_cond,
+                            depth_temp=args.depth_temp,
                           )
                ])
     elif config.CHOSEN_MODEL == cst.Models.CGAN:
@@ -419,6 +424,8 @@ if args.diffusion:
         _flag_suffix += "_dt2"
     if args.guidance_scale != 1.0:
         _flag_suffix += "_gs{}".format(args.guidance_scale)
+    if args.depth_temp != 1.0:
+        _flag_suffix += "_dtemp{}".format(args.depth_temp)
 
 if trade_pov:
     if args.diffusion:

@@ -30,7 +30,8 @@ class WorldAgent(Agent):
 
     def __init__(self, id, name, type, symbol, date, date_trading_days, model, data_dir, log_orders=True, random_state=None, normalization_terms=None,
                  using_diffusion=False, chosen_model=None, seq_len=256, cond_seq_size=255, cond_type='full', size_type_emb=3, gen_seq_size=1,
-                 fix_time=False, type_decode='l1', fix_cancel_bind=False, fix_lob_pad=False, drop_type2_cond=False):
+                 fix_time=False, type_decode='l1', fix_cancel_bind=False, fix_lob_pad=False, drop_type2_cond=False,
+                 depth_temp=1.0):
 
         super().__init__(id, name, type, random_state=random_state, log_to_file=log_orders)
         self.count_neg_size = 0
@@ -76,6 +77,7 @@ class WorldAgent(Agent):
         self.fix_cancel_bind = fix_cancel_bind    # H3: bind cancels to nearest same-side order instead of dropping
         self.fix_lob_pad = fix_lob_pad            # H5: sentinel-pad empty LOB levels pre-z-score (match training)
         self.drop_type2_cond = drop_type2_cond    # H7: exclude partial cancels from conditioning (match training)
+        self.depth_temp = depth_temp              # scale decoded depth z (kappa>1 restores the marketable tail)
         # log class priors [limit, cancel, market] for the 'prior' decode. Taken from the
         # real test-set next-event marginals (limit=0.49, cancel=0.48, market=0.03).
         self._type_log_prior = torch.log(torch.tensor([0.49, 0.48, 0.03], device=cst.DEVICE))
@@ -586,7 +588,15 @@ class WorldAgent(Agent):
 
         # we return the size and the time to the original scale
         size = round(generated[self.size_type_emb+1].item() * self.normalization_terms["event"][1] + self.normalization_terms["event"][0], ndigits=0)
-        depth = round(generated[-1].item() * self.normalization_terms["event"][7] + self.normalization_terms["event"][6], ndigits=0)
+        # depth_temp: scale the decoded depth z-score before denormalizing. Training clamped
+        # depth to >=0, so the model piles its depth output near 0 (passive); only sampling
+        # variance spilling below 0 produces marketable orders that execute and move price.
+        # Deterministic few-step sampling doesn't spill -> freeze. Scaling z_depth by kappa>1
+        # widens (and slightly shifts) the depth distribution so some mass crosses into
+        # negative (marketable) territory, restoring the tail without a stochastic sampler.
+        # kappa=1.0 -> identical to original behavior.
+        z_depth = generated[-1].item() * self.depth_temp
+        depth = round(z_depth * self.normalization_terms["event"][7] + self.normalization_terms["event"][6], ndigits=0)
         time = generated[0].item() * self.normalization_terms["event"][5] + self.normalization_terms["event"][4]
 
         # Pre-drop depth histogram. The freeze is a depth-diversity problem: few-step
