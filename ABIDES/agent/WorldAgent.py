@@ -81,6 +81,7 @@ class WorldAgent(Agent):
         self._type_log_prior = torch.log(torch.tensor([0.49, 0.48, 0.03], device=cst.DEVICE))
         # ── Diagnostics (always on, cheap counters) ──
         self.decoded_type_counts = {1: 0, 3: 0, 4: 0}  # pre-drop decode histogram (1=limit,3=cancel,4=market)
+        self.depth_hist = {"neg": 0, "0": 0, "1-2": 0, "3-5": 0, "6+": 0}  # pre-drop generated-depth histogram
         self.drop_counts = {"size_range": 0, "limit_out_of_depth": 0,
                             "cancel_no_best": 0, "cancel_side_empty": 0}
         self.resample_total_batches = 0
@@ -118,6 +119,9 @@ class WorldAgent(Agent):
             self.generated_cancel_orders_empty_depth, self.ignored_cancel))
         print("DIAG resample: total_batches={} extra_batches={} exhausted={}".format(
             self.resample_total_batches, self.resample_extra_batches, self.resample_exhausted))
+        print("DIAG depth_pre_drop: neg={} 0={} 1-2={} 3-5={} 6+={}".format(
+            self.depth_hist["neg"], self.depth_hist["0"], self.depth_hist["1-2"],
+            self.depth_hist["3-5"], self.depth_hist["6+"]))
         for feat, s in sorted(self.cond_stats.items()):
             mean = s[2] / s[3] if s[3] else float("nan")
             print("DIAG cond_z[{}]: min={:.2f} mean={:.2f} max={:.2f} n={}".format(feat, s[0], mean, s[1], s[3]))
@@ -584,6 +588,16 @@ class WorldAgent(Agent):
         size = round(generated[self.size_type_emb+1].item() * self.normalization_terms["event"][1] + self.normalization_terms["event"][0], ndigits=0)
         depth = round(generated[-1].item() * self.normalization_terms["event"][7] + self.normalization_terms["event"][6], ndigits=0)
         time = generated[0].item() * self.normalization_terms["event"][5] + self.normalization_terms["event"][4]
+
+        # Pre-drop depth histogram. The freeze is a depth-diversity problem: few-step
+        # deterministic sampling collapses depth toward its mean (~1 tick, passive), so
+        # orders never cross the spread, never execute, and stack into walls. The negative
+        # (marketable) tail is what drives executions and price movement — track it directly.
+        if depth < 0:      self.depth_hist["neg"] += 1
+        elif depth == 0:   self.depth_hist["0"] += 1
+        elif depth <= 2:   self.depth_hist["1-2"] += 1
+        elif depth <= 5:   self.depth_hist["3-5"] += 1
+        else:              self.depth_hist["6+"] += 1
 
         # if the price or the size are negative we return None and we generate another order
         if size < 0 or size > 1000:
