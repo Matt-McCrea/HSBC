@@ -1,174 +1,178 @@
-# Why deterministic samplers collapse the market, and why the reference DDIM result is an artifact
+# Deterministic samplers in closed-loop LOB simulation: why they collapse, and what single-step DDIM actually is
 
-*Finding writeup — INTC 2015, TRADES diffusion LOB simulator, closed-loop world-agent.*
+*Finding writeup — INTC 2015-01-30, TRADES diffusion LOB simulator, closed-loop world-agent.
+Cross-checked against the TRADES paper (arXiv:2502.07071) and the authors' released
+`TRADES-LOB` dataset.*
 
 ## Executive summary
 
 In closed-loop limit-order-book (LOB) simulation, the DDPM sampler reproduces a moving,
 realistic market, but every *deterministic* accelerated sampler we tested fails in one of two
 ways: few-step DDIM (η=0) **freezes** the mid-price, and full-step deterministic DDIM
-**diverges** (price crash, out-of-distribution conditioning). We show the failure reduces to a
-single scalar mechanism — **variance contraction in the order-depth channel** — and that it is
-intrinsic to deterministic sampling, not to the trained model. We further show that the
-reference implementation's apparent DDIM success is an artifact: its default configuration runs
-DDIM with a *single* sampling step, which mathematically passes the initial Gaussian noise
-through almost unmodified. Its realism is a property of the marginal noise statistics, not of
-conditional generation.
+**diverges**. We show the failure reduces to a single scalar mechanism — **variance contraction
+in the order-depth channel** — and that it is intrinsic to deterministic sampling on our
+(under-trained) checkpoint, not evidence of a broken model: DDPM recovers the healthy behaviour
+on the *same* weights.
+
+We also examined the authors' own sampling choices. The paper's main results and released dataset
+use **DDPM with 100 steps**; single-step DDIM appears only as a disclosed lossy acceleration
+(predictive score 1.213 → 3.146 on Tesla). So there is no hidden result. However, the *framing* of
+single-step DDIM as an "acceleration technique" is mechanically misleading: at one step the model
+contributes ≈1.7% of the output and the sampler emits essentially the Gaussian prior. It is not a
+reduced-fidelity version of conditional generation — it is the near-absence of it, and the
+disclosed score collapse is the symptom.
 
 ---
 
 ## 1. From model output to a price-moving order
 
 The model emits, per order, a vector in a normalized (z-scored) feature space. The channel that
-determines whether an order can move the price is the **depth** (ticks from the best quote).
-It is decoded ([WorldAgent.py](../ABIDES/agent/WorldAgent.py) `_postprocess_generated_TRADES`)
-as
+decides whether an order can move the price is the **depth** (ticks from the best quote), decoded
+([WorldAgent.py](../ABIDES/agent/WorldAgent.py) `_postprocess_generated_TRADES`) as
 
 $$\text{depth} = \operatorname{round}\!\big(z_d \cdot \sigma_d + \mu_d\big), \qquad \mu_d = 1.3847,\ \sigma_d = 2.6777 .$$
 
-A generated order is **marketable** — it crosses the spread, executes immediately, and therefore
-moves the mid-price — exactly when `depth < 0`, i.e.
+An order is **marketable** — it crosses the spread, executes immediately, and moves the mid-price
+— exactly when `depth < 0`, i.e.
 
 $$z_d < \frac{0-\mu_d}{\sigma_d} = -0.517 .$$
 
-Passive orders (`depth ≥ 0`) rest in the book and never move the price on their own; they can
-only accumulate. **Price movement in this simulator is driven by the fraction of generated
-orders whose depth output falls below −0.517σ.** This is the single quantity that separates a
-live market from a frozen one.
+Passive orders (`depth ≥ 0`) only rest and accumulate. **Price movement in this simulator is
+driven by the fraction of generated orders whose depth output falls below −0.517σ.** That single
+quantity separates a live market from a frozen one.
 
 ## 2. The marketable tail is a *sampling artifact*, not a learned feature
 
-The training pipeline clamps depth to be non-negative (`depth = max(depth, 0)` in preprocessing;
-the real next-event depth histogram likewise shows **0% negative depth**). The model therefore
-never sees negative-depth targets and learns a depth distribution piled up at 0 with a floor.
-Empirically the generated depth distribution confirms this: DDIM(η=0) produces **68.9% of orders
-at depth 0 and 0% negative**.
-
-Consequently the marketable (negative-depth) orders that a healthy market needs are **not**
-produced by the model's conditional mean. They arise only when **stochastic sampling variance
-spills the depth output below the depth-0 floor.** This single observation explains the entire
+Preprocessing clamps depth to be non-negative, and the real next-event depth histogram shows **0%
+negative depth**. The model therefore never sees negative-depth targets and learns a depth
+distribution piled at 0 with a floor. Marketable orders arise only when **stochastic sampling
+variance spills the depth output below that floor.** This one fact drives the entire
 DDPM-vs-deterministic split.
 
 ## 3. The mechanism: variance contraction in one channel
 
-At every reverse step both DDPM and DDIM compute the same posterior-mean estimate of the clean
-sample,
+At every reverse step both samplers compute the same posterior-mean estimate
 
 $$\hat{x}_0 = \frac{x_t - \sqrt{1-\bar\alpha_t}\,\hat\varepsilon_\theta(x_t,t)}{\sqrt{\bar\alpha_t}} \approx \mathbb{E}[x_0 \mid x_t,\text{cond}] .$$
 
-The samplers differ only in how much fresh noise they inject around it. Treating the generated
-depth output as approximately Gaussian with standard deviation $s$ (centred near the floor), the
-marketable fraction is $\Phi(-0.517/s)$:
+Treating the decoded depth as approximately Gaussian with std $s$ (near the floor), the marketable
+fraction is $\Phi(-0.517/s)$:
 
 | depth-output std $s$ | marketable fraction $\Phi(-0.517/s)$ | observed regime |
 |---|---|---|
-| $1.0$ (well-calibrated) | **30.3%** | ≈ DDPM (~23% neg) → **moves** |
+| $1.0$ (well-calibrated) | **30.3%** | ≈ the Gaussian prior (see §7) |
 | $0.5$ | 15.1% | — |
-| $0.3$ (few-step deterministic) | **4.2%** | ≈ DDIM η=0 → **frozen** |
+| $0.3$ (few-step deterministic) | **4.2%** | ≈ our DDIM η=0 → **frozen** |
 
-Deterministic few-step sampling contracts $s$: the coarse ODE discretisation pulls the output
-onto the (floored) conditional mean, so almost nothing reaches the −0.517σ threshold. DDPM keeps
-$s \approx 1$ by re-injecting noise each step, so ~1/4 of orders spill negative and execute. **The
-freeze is variance contraction in the depth channel; nothing else is required to explain it.**
+Deterministic few-step sampling contracts $s$ (the coarse ODE discretisation pulls the output onto
+the floored conditional mean), so almost nothing reaches −0.517σ. DDPM keeps $s\approx$ its trained
+value by re-injecting noise each step. **The freeze is variance contraction in the depth channel.**
 
 ## 4. Why DDIM(η=1) is *not* equivalent to DDPM
 
-A natural objection: DDIM with η=1 is supposed to recover DDPM. It does not here, and the reason
-is the **learned variance**. The two updates share the mean but differ in the noise scale $s$:
+The two updates share the mean and differ only in the injected-noise scale $s$:
 
-- **DDIM(η):** $s = \eta\,\sqrt{\tilde\beta_t}$, where $\tilde\beta_t = \dfrac{1-\bar\alpha_{t-1}}{1-\bar\alpha_t}\big(1-\tfrac{\bar\alpha_t}{\bar\alpha_{t-1}}\big)$ is the *fixed* DDPM posterior-variance **lower bound**.
-- **DDPM (IDDPM parameterisation, [gaussian_diffusion.py](../models/diffusers/gaussian_diffusion.py) `ddpm_single_step`):** $s = \sqrt{\exp(\text{log\_var})}$ with
+- **DDIM(η):** $s = \eta\sqrt{\tilde\beta_t}$, the *fixed* posterior-variance lower bound
+  $\tilde\beta_t = \frac{1-\bar\alpha_{t-1}}{1-\bar\alpha_t}\big(1-\frac{\bar\alpha_t}{\bar\alpha_{t-1}}\big)$.
+- **DDPM (IDDPM, [gaussian_diffusion.py](../models/diffusers/gaussian_diffusion.py) `ddpm_single_step`):**
+  $s = \sqrt{\exp(f\log\beta_t + (1-f)\log\tilde\beta_t)}$, $f=\tfrac12(v_\theta+1)$ — a **learned**
+  per-dimension interpolation between the lower bound $\tilde\beta_t$ and upper bound $\beta_t$.
 
-$$\text{log\_var} = f\,\log\beta_t + (1-f)\,\log\tilde\beta_t, \qquad f = \tfrac{1}{2}(v_\theta+1)\in[0,1],$$
+Wherever the model learned $f>0$ (more spread than the floor — what a heavy-tailed channel like
+depth needs), DDPM injects strictly more noise than DDIM can at any η≤1. Empirically our DDIM(η=1)
+reaches "movement" not through depth but by the *type* channel wandering into the oversized MARKET
+region — a buy-biased market-order flood that **drifts +11%**, not price discovery.
 
-a **learned, per-dimension** interpolation between the lower bound $\tilde\beta_t$ and the upper
-bound $\beta_t$, controlled by the network's second output $v_\theta$.
+## 5. Why "just use more steps" also fails (for our checkpoint)
 
-Wherever the model learned $f>0$ — i.e. it wants more spread than the floor, which is exactly what
-a heavy-tailed channel like depth needs — **DDPM injects strictly more noise than DDIM can at any
-η ≤ 1.** So even η=1 under-samples the depth tail. Empirically, DDIM(η=1) reaches "movement" not
-through the depth tail at all but by the *type* channel wandering into the (geometrically
-oversized) MARKET decision region — a different route that produces a buy-biased flood of market
-orders and a **+11% price drift**, not genuine price discovery.
+Full-step deterministic DDIM (`nsteps=100`, η=0) **diverges**: 70% of decodes become market orders,
+conditioning reaches +265σ, price crashes 34%. The probability-flow ODE is stiff for our
+under-trained score field, so fine deterministic integration accumulates error. Deterministic
+sampling has no good operating point on this checkpoint: few steps freeze, many steps diverge.
 
-## 5. Why "just use more steps" also fails
+## 6. What single-step DDIM actually computes
 
-If contraction is the problem, more deterministic steps should help. It does not: full-step
-deterministic DDIM (`nsteps=100`, η=0) **diverges** — 70% of decodes become market orders, the
-conditioning goes to +265σ, and the price crashes 34% to \$22. The probability-flow ODE is stiff
-for this (under-trained) score field, so fine deterministic integration accumulates error rather
-than resolving the conditional. Deterministic sampling thus has no good operating point here:
-few steps freeze, many steps diverge.
+The repository's default simulation command ([README.md](../README.md)) passes neither `-type` nor
+`-nsteps`, so it runs the argparse defaults **`DDIM`, `nsteps=1`**
+([world_agent_sim.py](../ABIDES/config/world_agent_sim.py)). Trace it exactly:
 
-## 6. The reference DDIM result is an artifact of single-step sampling
+1. The sample is initialised at $t=99$ as essentially pure noise:
+   $x_t = \sqrt{\bar\alpha_{99}}\cdot 0 + \sqrt{1-\bar\alpha_{99}}\,\epsilon \approx \epsilon$
+   ($\bar\alpha_{99}=2.4\times10^{-6}$).
+2. The single step uses the nearly-clean $t{=}1$ entry, $\bar\alpha_1=0.9983$. In
+   `ddim_single_step`, the x̂₀ line
+   `pred_x0 = (x_t - sqrt_one_minus_alpha·noise_t)/alpha**0.5` has noise weight
+   $\sqrt{1-\bar\alpha_1}/\sqrt{\bar\alpha_1} = \mathbf{0.042}$ and $x_t$-weight $1.001$.
+3. The returned value `x_prev = √(ᾱ₀)·pred_x0 + √(1−ᾱ₀)·noise_t` (η=0, $\bar\alpha_0=0.9994$) adds
+   part of the noise back, partially cancelling; the **net** output is
 
-The reference implementation's documented simulation command
-([README.md](../README.md)) passes neither `-type` nor `-nsteps`, so it runs the argparse
-defaults: **`DDIM` with `nsteps = 1`** ([world_agent_sim.py](../ABIDES/config/world_agent_sim.py)).
-A single-step DDIM is not a denoiser in any meaningful sense. Concretely:
+$$x_{\text{out}} = 1.0006\,x_t \;-\; \mathbf{0.017}\,\hat\varepsilon .$$
 
-1. The sample is initialised at the highest noise level, $t=99$, as essentially pure noise:
-   $x_t = \sqrt{\bar\alpha_{99}}\cdot 0 + \sqrt{1-\bar\alpha_{99}}\,\epsilon \approx \epsilon$, since $\bar\alpha_{99}=2.4\times10^{-6}$.
-2. The single reverse step uses the *nearly clean* $t{=}1$ schedule entry, $\bar\alpha_1 = 0.9983$.
-   The posterior-mean estimate is then
+So end-to-end the model contributes **~1.7%** of the output; ~98% is the initialisation noise.
+(There is also a train/inference mismatch: the network is queried at label $t{=}1$ while its input
+is fully noised, so even that 1.7% is not meaningful denoising.) The output keeps **unit variance
+in every channel**, so $z_d\sim\mathcal N(0,1)$ and the marketable fraction is $\Phi(-0.517)=30.3\%$
+— an alive market produced by decoding the standard-normal prior, not by the diffusion model.
 
-$$\hat{x}_0 = \frac{x_t - \sqrt{1-\bar\alpha_1}\,\hat\varepsilon}{\sqrt{\bar\alpha_1}} = \underbrace{1.001}_{\text{coeff on }x_t}\,x_t \;-\; \underbrace{0.042}_{\text{weight on }\hat\varepsilon}\,\hat\varepsilon .$$
+## 7. What the paper actually does (and the honest critique)
 
-3. The final DDIM update ($\bar\alpha_0 = 0.9994$) leaves this essentially unchanged, so the
-   decoded order vector is the **initial Gaussian noise, passed through with a ~4% model
-   correction.** (There is also a train/inference mismatch: the network is queried at label
-   $t{=}1$ while its input is fully-noised, so even that 4% is not meaningful denoising.)
+From the paper (arXiv:2502.07071) and the released data:
 
-The output therefore retains **unit variance in every channel**, including depth: $z_d \sim
-\mathcal{N}(0,1)$, giving a marketable fraction of $\Phi(-0.517) = 30.3\%$ — a fully alive market.
+- **Main results and the `TRADES-LOB` dataset use DDPM, 100 steps.** Our analysis of their released
+  INTC 2015-01-30 file confirms it: flow mix 46/36/17 (matching our DDPM 47/34/19), depth std 2.02
+  with only 3.1% marketable spread smoothly across levels, a lean book (bid_size median 1,020), and
+  46 distinct mid-prices over a \$0.23 range. This is structured conditional generation — **not** the
+  ~30%-marketable signature of the §6 single-step regime. Their headline results are genuine.
+- **Single-step DDIM is disclosed as a lossy acceleration**, with the predictive score worsening
+  from 1.213 to 3.146 (Tesla) for a "100× efficiency" gain. Nothing is hidden.
 
-**This is the crux: the reference DDIM "works" because it is not really running the model.** It
-samples the standard normal prior and decodes it. Its realism is inherited from the *marginal*
-statistics of the z-scored feature space (which are, by construction, well-behaved and balanced),
-and marginal statistics are exactly what most stylized-fact metrics measure. It is not evidence
-of good *conditional* generation, and it should not be read as a working accelerated sampler. If
-the paper's reported DDIM baseline used this default configuration, its apparent success is an
-artifact of single-step near-marginal sampling rather than a property of the diffusion model.
+**The defensible critique is one of characterisation, not concealment.** Presenting single-step
+DDIM as an "acceleration technique" places it on the same fidelity–speed axis as multi-step DDPM,
+implying a graceful trade-off. Mechanically (§6) it is not: at one step the sampler bypasses the
+model (~1.7% contribution) and emits the Gaussian prior. The reported score collapse
+(1.213 → 3.146) is exactly the fingerprint of that bypass. So the honest reading is: *the number is
+disclosed, but framing single-step DDIM as reduced-fidelity acceleration understates that it is a
+qualitatively different, near-marginal regime rather than a diminished version of the same
+conditional generation.*
 
-## 7. Empirical evidence (INTC, 09:30–10:00, checkpoint val_ema=0.681)
+## 8. Empirical evidence (INTC, checkpoint val_ema=0.681)
 
 | sampler | market decode | executions | unique mids | mid drift | verdict |
 |---|---|---|---|---|---|
 | real target | 2.8% | 7.0% | 69 | \$0.37 | — |
-| DDIM 10, η=0 | 2.7% | 4.8% | **6** | \$0.03 | frozen (depth collapse) |
-| DDIM 10, η=1 | 24.1% | 15.7% | 136 | **\$1.23** | moves via market-order drift |
-| DDIM 10, η=1 + prior decode | 1.7% | 2.8% | **3** | \$0.01 | drift removed → refreezes |
-| DDIM 100, η=0 | 70.8% | 48.2% | 49 | **−\$11.5** | diverges (ODE stiff) |
-| DDPM 100 | 7.9% | 18.8% | 23 | \$0.11 | **works** |
-| DDIM 1 (reference default) | — | — | (moves) | — | near-marginal noise (§6) |
+| **their DDPM (released `TRADES-LOB`)** | — | 17.3% | 46 | \$0.23 | **benchmark: structured, moving** |
+| our DDPM 100 | 7.9% | 18.8% | 23 | \$0.11 | works (matches theirs) |
+| our DDIM 10, η=0 | 2.7% | 4.8% | **6** | \$0.03 | frozen (depth collapse) |
+| our DDIM 10, η=1 | 24.1% | 15.7% | 136 | **\$1.23** | moves via market-order drift |
+| our DDIM 100, η=0 | 70.8% | 48.2% | 49 | **−\$11.5** | diverges (stiff ODE) |
+| DDIM 1 (repo default) | — | — | (moves) | — | Gaussian prior (§6) |
 
-## 8. The trained model is not the cause
+## 9. The trained model is not the cause; ours is under-trained
 
-Critically, **DDPM recovers the marketable tail on the exact same checkpoint** — ~23% negative
-depth, a lean book, and a moving price. The tail therefore *exists* in the learned distribution;
-the model is not fundamentally broken. What fails is specifically the *deterministic extraction*
-of a tail that requires stochasticity to reach. Under-training makes the score field stiffer
-(worsening both the contraction and the divergence), but it is not the root cause: even a
-perfectly trained model, sampled deterministically at low step count, would contract the same
-scalar channel below the marketable threshold.
+DDPM recovers the marketable tail on the exact checkpoint that DDIM freezes on, so the tail exists
+in the learned distribution. Our deterministic failures are (a) **aggressive acceleration** (few
+steps collapse the depth channel; many steps hit a stiff ODE) on (b) an **under-trained checkpoint**
+(epoch 1–4, validation loss plateaued). The authors' converged model has a genuinely wide
+conditional depth distribution (their released std ≈ 2.0), which a proper sampler preserves. The
+gap between "their DDIM/DDPM works" and "ours struggles" is **model quality × sampler
+aggressiveness**, not a trick.
 
-## 9. Caveats (for defensible claims)
+## 10. Caveats
 
-- We were unable to run the original authors' released checkpoint (their distribution folder is
-  empty), so the comparison against "the paper's model" is partly inferential.
-- The claim that the reference DDIM baseline used `nsteps=1` is based on the repository's
-  documented run command; the paper's internal experiments may have used a different setting. The
-  *mechanism* (single-step DDIM = near-marginal sampling) is exact regardless.
+- We could not run the authors' released checkpoint at the time of the first analysis (their Drive
+  folder appeared empty); the README links it and it is worth re-attempting, which would allow a
+  direct same-model comparison.
 - Validation loss does not track simulation quality here (a val=2.317 checkpoint reportedly
-  simulates fine; our val=0.681 freezes under multi-step DDIM), so checkpoints must be judged by
-  simulation-level metrics — flow mix, depth histogram, unique-mid count — not by val loss.
+  simulates fine; our val=0.681 freezes under multi-step DDIM). Judge checkpoints by
+  simulation-level metrics — flow mix, depth histogram, unique-mid count — against the released
+  `TRADES-LOB` benchmark, not by val loss.
 
-## 10. Implication
+## 11. Implication
 
-For faithful **closed-loop** LOB simulation, the marketable-order tail that drives price
-discovery is produced by sampling variance breaching a training-imposed depth floor, not by the
-conditional mean. Deterministic ODE samplers therefore cannot reproduce it: few steps collapse
-it, many steps diverge. **Genuine accelerated sampling in this setting requires stochasticity**
-(DDPM, an SDE solver, or a stochastic-head hybrid), or an explicit variance-restoring correction
-in the depth channel. Reports of deterministic DDIM "working" should be checked for the
-single-step near-marginal regime before being taken as evidence of conditional realism.
+For faithful **closed-loop** LOB simulation, the marketable-order tail that drives price discovery
+is produced by sampling variance breaching a training-imposed depth floor, not by the conditional
+mean. Deterministic ODE samplers cannot reproduce it on our checkpoint: few steps collapse it, many
+steps diverge. **Genuine accelerated sampling here requires stochasticity** (DDPM, an SDE solver, or
+a stochastic-head hybrid), or an explicit variance-restoring correction in the depth channel. And
+single-step DDIM should be reported as a degenerate near-marginal regime, not as a point on a
+graceful acceleration curve — the disclosed score collapse is precisely why.
