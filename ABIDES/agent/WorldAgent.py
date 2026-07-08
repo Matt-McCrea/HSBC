@@ -85,6 +85,7 @@ class WorldAgent(Agent):
                             "cancel_no_best": 0, "cancel_side_empty": 0}
         self.resample_total_batches = 0
         self.resample_extra_batches = 0
+        self.resample_exhausted = 0   # times the resample cap was hit and the wakeup was rescheduled
         self.cond_stats = {}                      # per-feature [min, max, sum, count] of z-scored conditioning
         self.using_diffusion = using_diffusion
         self.chosen_model = chosen_model
@@ -115,8 +116,8 @@ class WorldAgent(Agent):
             self.drop_counts["cancel_no_best"], self.drop_counts["cancel_side_empty"]))
         print("DIAG cancel_empty_depth_fallbacks={} ignored_cancel_at_place={}".format(
             self.generated_cancel_orders_empty_depth, self.ignored_cancel))
-        print("DIAG resample: total_batches={} extra_batches={}".format(
-            self.resample_total_batches, self.resample_extra_batches))
+        print("DIAG resample: total_batches={} extra_batches={} exhausted={}".format(
+            self.resample_total_batches, self.resample_extra_batches, self.resample_exhausted))
         for feat, s in sorted(self.cond_stats.items()):
             mean = s[2] / s[3] if s[3] else float("nan")
             print("DIAG cond_z[{}]: min={:.2f} mean={:.2f} max={:.2f} n={}".format(feat, s[0], mean, s[1], s[3]))
@@ -190,6 +191,10 @@ class WorldAgent(Agent):
                     self.shape_temp_distance, self.loc_temp_distance, self.scale_temp_distance = stats.gamma.fit(temporal_distance)
         
                 generated_orders = self._generate_order(currentTime)
+                if len(generated_orders) == 0:
+                    # resample loop exhausted — retry shortly with fresh conditioning
+                    self.setWakeup(currentTime + datetime.timedelta(seconds=1))
+                    return
                 self.next_orders = generated_orders
                 self.first_generation = False
                 offset_time = datetime.timedelta(seconds=generated_orders[0][0])
@@ -212,6 +217,10 @@ class WorldAgent(Agent):
                 self.next_orders = self.next_orders[1:]
             else:
                 self.next_orders = self._generate_order(currentTime)
+                if len(self.next_orders) == 0:
+                    # resample loop exhausted — retry shortly with fresh conditioning
+                    self.setWakeup(currentTime + datetime.timedelta(seconds=1))
+                    return
                 offset_time = datetime.timedelta(seconds=self.next_orders[0][0])
             self.setWakeup(currentTime + offset_time + datetime.timedelta(microseconds=1))
             return
@@ -305,11 +314,17 @@ class WorldAgent(Agent):
         else:
             log_print("Agent ignored order of quantity zero: {}", order)
 
-    def _generate_order(self, currentTime):
+    def _generate_order(self, currentTime, max_attempts=100):
         generated = None
         post_processed_orders = []
         attempts = 0
-        while len(post_processed_orders) == 0:
+        # Cap the resample loop: each iteration is a full diffusion sample(). If every
+        # generated order in a batch keeps hitting a drop filter (e.g. a checkpoint that
+        # reliably emits out-of-range sizes for the current conditioning state), the loop
+        # would otherwise spin forever and hang the whole simulation. On exhaustion we
+        # return an empty list; the caller reschedules a retry wakeup so fresh market data
+        # can shift the conditioning out of the degenerate state.
+        while len(post_processed_orders) == 0 and attempts < max_attempts:
             attempts += 1
             self.resample_total_batches += 1
             if attempts > 1:
@@ -360,6 +375,8 @@ class WorldAgent(Agent):
                 if generated is not None:
                     post_processed_orders = [generated]
                     # generated = [offset, order_type, order_id, size, price, direction]
+        if len(post_processed_orders) == 0:
+            self.resample_exhausted += 1
         return post_processed_orders
 
 
