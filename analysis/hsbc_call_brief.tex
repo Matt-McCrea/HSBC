@@ -1,6 +1,6 @@
 \documentclass[11pt]{article}
 \usepackage[margin=1in]{geometry}
-\usepackage{amsmath,booktabs,array,xcolor}
+\usepackage{amsmath,booktabs,array,xcolor,graphicx}
 \usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
 \newcommand{\code}[1]{\texttt{\small #1}}
 \setlength{\parskip}{4pt}\setlength{\parindent}{0pt}
@@ -10,8 +10,6 @@
 
 \begin{document}
 \maketitle\vspace{-2em}
-
-\section{Root cause: price movement is one scalar}
 
 An order moves the price only if it is \emph{marketable} (crosses the spread and executes). Depth
 is decoded in \code{WorldAgent.py}$\to$\code{\_postprocess\_generated\_TRADES} as
@@ -108,6 +106,57 @@ acceleration (predictive score $1.213\!\to\!3.146$). We verified from \code{ddim
 at one step the model contributes \textbf{$\sim$1.7\%} of the output ($\bar\alpha_1{=}0.998$, near
 clean): it is a \emph{near-marginal regime}, not a graceful accelerator --- the disclosed score
 collapse is the fingerprint of that.
+
+\section{Figures: order-flow \& market-order composition}
+
+\begin{figure}[htbp]\centering
+\includegraphics[width=0.9\linewidth]{figures/flow_mix_comparison.png}
+\caption{Order-type composition (limit/cancel/executed), measured identically in the real
+market-replay, the authors' released \code{TRADES-LOB} (DDPM), and our runs. Even the released
+gold-standard \emph{over-executes} (17\% vs real 7\%); frozen DDIM under-executes (5\%); depth-temp
+over-executes badly (36\%). ``Executed'' bundles market orders and marketable-limit executions and
+cannot be split from the output CSV.}
+\end{figure}
+
+\begin{figure}[htbp]\centering
+\includegraphics[width=0.9\linewidth]{figures/market_decode_rate.png}
+\caption{The model's raw \emph{market-order decode} rate --- our internal pre-drop diagnostic,
+\emph{not} measurable in any released CSV (there market orders fold into ``executed''). DDPM is the
+only sampler that moves the market at a realistic rate ($\sim$8\%); every other configuration that
+produces movement inflates market orders to $\sim$25--29\% ($\approx$9$\times$ real) --- the drift
+mechanism.}
+\end{figure}
+
+\begin{table}[htbp]\centering\small
+\textbf{(a) Flow composition} --- measurable in all CSVs\\[2pt]
+\begin{tabular}{lccc}
+\toprule
+source & Limit \% & Cancel \% & Exec \%\\
+\midrule
+Real (market replay) & 49.2 & 43.8 & 7.0\\
+Their \code{TRADES-LOB}, INTC 30 (DDPM) & 46.4 & 36.2 & 17.3\\
+Their \code{TRADES-LOB} (INTC/TSLA, 29--30) & 45.9--46.6 & 36.2--39.4 & 14.0--17.3\\
+Ours: DDPM-100 & 47.2 & 34.0 & 18.8\\
+Ours: DDIM-10 $\eta{=}0$ (frozen) & 59.4 & 35.8 & 4.8\\
+Ours: DDIM-10 $\eta{=}1$ & 47.8 & 36.5 & 15.7\\
+Ours: HYBRID DDPM$\to$PP (8+2) & 49.1 & 39.1 & 11.8\\
+Ours: DDIM-10 depth-temp 2.0 & 40.4 & 24.0 & 35.7\\
+\bottomrule
+\end{tabular}
+
+\vspace{8pt}
+\textbf{(b) Market-order decode \%} --- our runs only (real $\approx$2.8\%; not measurable in released CSVs)\\[2pt]
+\begin{tabular}{lc@{\hspace{2em}}lc}
+\toprule
+run & mkt \% & run & mkt \%\\
+\midrule
+DDPM-100 + prior & 0.08 & DDIM-10 $\eta{=}1$ & 24.1\\
+DDIM-10 $\eta{=}0$ (frozen) & 2.7 & DDIM-10 $\eta{=}0$ (ckpt 0.719) & 24.8\\
+DDPM-100 & 7.9 & HYBRID DDPM$\to$PP (8+2) & 26.0\\
+ & & DDIM-10 depth-temp 2.0 & 29.3\\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \section{State of play \& next steps}
 

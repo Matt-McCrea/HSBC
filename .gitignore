@@ -35,3 +35,12 @@ output/
 
 # Generated outputs (images, plots)
 stylized_custom_outputs/
+
+# Authors's released TRADES-LOB dataset (large; fetch from LeonardoBerti00/DeepMarket LFS)
+data/TRADES-LOB/*.csv
+
+# LaTeX build artifacts
+analysis/*.pdf
+analysis/*.aux
+analysis/*.log
+analysis/*.out
