@@ -1,113 +1,125 @@
-# DeepMarket: Limit Order Book (LOB) simulation with Deep Learning.
-DeepMarket is a Python-based open-source framework developed for Limit Order Book (LOB) simulation with Deep Learning.
-This is also the official repository for the paper [TRADES: Generating Realistic Market Simulations with Diffusion Models](https://arxiv.org/abs/2502.07071).
+# TRADES — Diffusion-based Limit Order Book Simulation
 
-## Introduction 
-DeepMarket offers the following features: 
-1. Pre-processing for high-frequency market data.
-2. Training environment implemented with PyTorch Lightning. 
-3. Hyperparameter search facilitated with WANDB. 
-4. Implementations and checkpoints for TRADES and CGAN to directly generate market simulations without training.
-5. Comprehensive qualitative (via the plots in the paper) and quantitative (via the predictive score) evaluation. 
-6. TRADES-LOB: a synthetic LOB dataset in data/TRADES-LOB. 
+A transformer-diffusion generative "world model" that simulates a full limit-order-book (LOB)
+trading session order-by-order, inside an [ABIDES](https://github.com/abides-sim/abides) market.
+Based on the paper [TRADES: Generating Realistic Market Simulations with Diffusion Models](https://arxiv.org/abs/2502.07071)
+(Berti, Prenkaj, Velardi, 2025); this fork adds sampler-acceleration work and diagnostics
+(see [`analysis/`](analysis/)).
 
-To perform the simulation with our world agent and historical data, we extend ABIDES, an open-source agent-based interactive Python tool.
+---
 
-## TRADES-LOB: A synthetic LOB dataset 
-To foster collaboration and help the research community we release a synthetic LOB dataset: TRADES-LOB. TRADES-LOB comprises simulated TRADES market data for Tesla and Intel, for 29/01 and 30/01. Specifically, the dataset is structured into four CSV files, each containing 50 columns. The initial six columns delineate the order features, followed by 40 columns that represent a snapshot of the LOB across the top 10 levels. The concluding four columns provide key financial metrics: mid-price, spread, order volume imbalance, and Volume-Weighted Average Price (VWAP), which can be useful for downstream financial tasks, such as stock price prediction. In total, the dataset is composed of 265,986 rows and 13,299,300 cells, which is similar in size to the benchmark FI-2010 dataset.
+## Quickstart (recommended)
 
-# Getting Started 
-These instructions will get you a copy of the project up and running on your local machine for development and testing purposes.
+Everything runs through one script — it creates a local `./env` virtualenv and calls it directly,
+so **you never need to activate anything**. Run the steps in order:
 
-## Prerequisities
-This project requires Python and pip. If you don't have them installed, please do so first.   
-
-## Installing
-To set up the environment for this project, follow these steps:
-
-1. Clone the repository:
 ```sh
-git clone https://github.com/LeonardoBerti00/DeepMarket.git
+git clone <this-repo-url> && cd <repo>
+
+bash scripts/quickstart.sh setup                    # 1. create ./env, install dependencies
+bash scripts/quickstart.sh data path/to/INTC.zip    # 2. unpack your LOBSTER data into data/INTC/
+bash scripts/quickstart.sh train                     # 3. preprocess + train a TRADES checkpoint
+bash scripts/quickstart.sh simulate                  # 4. simulate a session (DDPM, 100 steps)
 ```
-2. Navigate to the project directory
-3. Create a virtual environment:
+
+Defaults target **INTC, 2015-01-30, 09:30–10:30** — which match the repo's config defaults, so for
+INTC 2015 data you don't need to edit any config files. The simulation writes an orders CSV and the
+paper's stylized-fact plots to `ABIDES/log/world_agent_INTC_…/`.
+
+> **GPU strongly recommended.** Training on CPU is impractical (15M-row dataset); simulation runs on
+> CPU but slowly. Check with `env/bin/python -c "import torch; print(torch.cuda.is_available())"`.
+> `requirements.txt` pins a CUDA 11.8 torch build — for other CUDA/CPU, reinstall torch for your
+> platform (the `setup` step prints how).
+
+### Simulate with a different sampler
+
 ```sh
-python -m venv env
+bash scripts/quickstart.sh simulate DDPM 100     # recommended: stochastic, realistic
+bash scripts/quickstart.sh simulate DDIM 10      # fast/deterministic (see analysis/ for caveats)
+bash scripts/quickstart.sh simulate DDPM 100 0.681   # 3rd arg = specific checkpoint val-loss id
 ```
-4. Activate the new Pip environment:
-```sh
-env\Scripts\activate
+
+If no checkpoint id is given, the best (lowest val-loss) checkpoint in `data/checkpoints/TRADES/`
+is used automatically.
+
+---
+
+## Data format
+
+LOBSTER-format CSVs (message + orderbook), placed at:
+
 ```
-5. Download the necessary packages:
+data/INTC/INTC_2015-01-02_2015-01-30/
+    2015-01-30_34200000_57600000_message_10.csv
+    2015-01-30_34200000_57600000_orderbook_10.csv
+    …one pair per trading day…
+```
+
+The folder name is `data/{STOCK}/{STOCK}_{first-day}_{last-day}`; the date range must match
+`DATE_TRADING_DAYS` in `constants.py` (default `2015-01-02 … 2015-01-30`). `quickstart.sh data`
+unzips into `data/INTC/` for you; just check the resulting path matches the above.
+
+To use a **different stock or date range**: add the stock to `cst.Stocks` in `constants.py`, set
+`DATE_TRADING_DAYS`, and set `CHOSEN_STOCK` in `configuration.py`.
+
+---
+
+## Manual steps (equivalent to the script)
+
+**Setup**
 ```sh
+python -m venv env && source env/bin/activate
 pip install -r requirements.txt
 ```
 
-# Market Simulation
-If your objective is to execute a market simulation, this is the section for you.
-
-## Generate a Market Simulation with TRADES checkpoint
-![TRADES's Architecture](https://github.com/LeonardoBerti00/DeepMarket/blob/main/data/architecture.jpg)
-First of all, you need to download the TRADES checkpoints from [link](https://drive.google.com/drive/folders/1fg5G9KzmzC6E4FUYSCjObJ7sCEdjo43W?usp=sharing), then place the checkpoints in data/checkpoints/TRADES/. There is one trained with TSLA and one with INTC. To execute a market simulation with a TRADES checkpoint, there are two options:
-1. If you do not have LOBSTER data, you can run the following command:
+**Train** — `configuration.py` controls the run. Key flags:
+- `IS_DATA_PREPROCESSED` — `False` (default) preprocesses the raw LOBSTER data into
+  `data/INTC/{train,val,test}.npy` before training; set `True` to reuse existing `.npy` and skip it.
+- `CHOSEN_MODEL = cst.Models.TRADES`, `CHOSEN_STOCK = [cst.Stocks.INTC]`, `EPOCHS = 50`.
 ```sh
-python -u ABIDES/abides.py -c world_agent_sim -t INTC -date 2012-06-21 -d True -m TRADES -st '09:30:00' -et '12:00:00' -id 2.317
+python main.py                       # preprocess (first run) + train
 ```
-The data that you are going to use is from [LOBSTER](https://lobsterdata.com/info/DataSamples.php). Since the model was not trained with this data, we cannot guarantee good performance. 
+The best checkpoint is saved to `data/checkpoints/TRADES/val_ema=<loss>_epoch=<n>_…ckpt`.
 
-2. If you have LOBSTER data, you need to save the data in f"data/{stock_name}/{stock_name}_{year}-{start_month}-{start_day}_{year}-{end_month}-{end_day}". The format of the data should be the same as LOBSTER: f"{year}-{month}-{day}_34200000_57600000_{type}". You can see an example with INTC. Then you need to simply change cst.DATE_TRAING_DAYS setting the start day and end day, run the following command, inserting the stock symbol and the date that you want to simulate:
+**Simulate**
 ```sh
-python -u ABIDES/abides.py -c world_agent_sim -t ${stock_symbol} -date ${date} -d True -m TRADES -st '09:30:00' -et '12:00:00' 
+python -u ABIDES/abides.py -c world_agent_sim -t INTC -date 20150130 \
+    -st 09:30:00 -et 10:30:00 -d True -m TRADES -type DDPM -nsteps 100
 ```
 
-When the simulation ends, a log will be saved in ABIDES/log, where you can find the processed orders of the simulation and all the plots used in the paper to evaluate the stylized facts. At the end of the simulation also the predictive score will also be computed. 
-If you want to perform a simulation with CGAN, you simply need to change the -m option to CGAN.
-To reproduce the results of the paper, you need exactly the same data, so TSLA or INTC of 29/01/2015 or 30/01/2015.
+---
 
-## Running a Market Simulation with IABS configuration
-If you want to run the IABS configuration:
-```sh
-python -u ABIDES/abides.py -c rsmc_03 -date 20150130 -st '09:30:00' -et '12:00:00' 
-```
+## What this fork adds
 
-# Training
-If you aim to train a TRADES model or implement your model, you should follow those steps.
+- **Extra samplers** in `models/diffusers/gaussian_diffusion.py`: `DPM_SOLVER`, `DPM_SOLVER_PP`,
+  `UNIPC`, and the hybrids `HYBRID_PP_DDPM` / `HYBRID_DDPM_PP` (pass via `-type`).
+- **Diagnostics & flag-gated experiments** in `ABIDES/agent/WorldAgent.py` (all default-off; see
+  `ABIDES/config/world_agent_sim.py --help`), e.g. `--type-decode prior`, `--depth-temp`,
+  `--guidance-scale`, and an always-on end-of-run diagnostics block.
+- **Evaluation tools**: `evaluation/quantitative_eval/flow_mix.py` (order-flow vs a real CSV) and
+  `evaluation/diagnostics/open_loop_eval.py` (sample the model on real windows, no ABIDES loop).
+- **Findings & figures** in [`analysis/`](analysis/) — `hsbc_call_brief.tex`,
+  `deterministic_sampler_findings.md`, and `figures/`.
 
-## Data 
-1. Firstly, you need to have some LOBSTER data, otherwise, it would be impossible to train a new model. The format of the data should be the same as LOBSTER: f"{year}-{month}-{day}_34200000_57600000_{type}" and the data should be saved in f"data/{stock_name}/{stock_name}_{year}-{start_month}-{start_day}_{year}-{end_month}-{end_day}". The type can be "message" or "orderbook".
-1. **Make sure to change the dates in constants. The splits in config and constants. The chosen stock in config. If adding a stock add it to constants stocks class, alongside prefixed version of all stats seen below.**
-2. You need to add the new stock to the constants and to the config file.
-3. You need to change cst.DATE_TRAINING_DAYS setting the start day and end day
-4. You need to start the preprocessing setting. To do so, set config.IS_DATA_PREPROCESSED to False and run python main.py
+Headline result: **DDPM (100 steps) reproduces a realistic, moving market; deterministic
+fast samplers (few-step DDIM / DPM-Solver) collapse it**. Full reasoning in `analysis/`.
 
-Note that for small runs there is a guard for standard deviation, if 0, becomes 1. Make sure on large runs this is not tripped and identify root cause. 
+---
 
-Number of workers has been reduced from 4 to 2 to allow Colab to work. 
+## Other configurations (from the original repo)
 
-## Implementing and Training a new model 
-To train a new model, follow these steps:
-1. Implement your model class in the models/ directory. Your model class should inherit from the NNEngine class and should be a PyTorch Lightning engine. 
-2. Update the HP_DICT_MODEL dictionary in run.py to include your model and its hyperparameters.
-3. Create a file {model_name}_hparam and write the hyperparameters that you want to use for your model. You can also specify hyperparameters for a hyperparameter search. Use the TRADES model as an example.
-4. Choose a configuration by modifying the `configuration.py` file.
-5. Run the training script:
-```sh
-python main.py
-```
-6. A checkpoint will be saved in data/checkpoints/ that you can later use to perform a market simulation
+- **CGAN** instead of TRADES: add `-m CGAN` to the simulate command.
+- **IABS agent-based baseline** (no generative model):
+  `python -u ABIDES/abides.py -c rsmc_03 -date 20150130 -st 09:30:00 -et 12:00:00`
+- **Author checkpoints / TRADES-LOB dataset**: see the original repo,
+  [LeonardoBerti00/DeepMarket](https://github.com/LeonardoBerti00/DeepMarket). The released
+  `TRADES-LOB` synthetic dataset (INTC/TSLA, 29–30 Jan 2015) is used here as a realism benchmark.
 
-## Training a TRADES Model 
-To train a TRADES model, you need to follow these steps:
-1. Set the CHOSEN_MODEL in configuration.py to cst.Models.TRADES
-2. Optionally, adjust the simulation parameters in `configuration.py`.
-3. Now you can run the main.py with:
-```sh
-python main.py
-```
+---
 
-# Citing
-If you use the framework in a research project, please cite:
-```sh
+## Citation
+
+```bibtex
 @article{berti2025trades,
   title={TRADES: Generating Realistic Market Simulations with Diffusion Models},
   author={Berti, Leonardo and Prenkaj, Bardh and Velardi, Paola},
@@ -115,4 +127,3 @@ If you use the framework in a research project, please cite:
   year={2025}
 }
 ```
-
