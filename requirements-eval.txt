@@ -1,0 +1,4 @@
+# Extra dependencies for external evaluation (kept out of the training/sim env).
+# LOB-Bench: standardized synthetic-LOB benchmark (peernagy/lob_bench).
+lob_bench
+# (numpy, pandas, scipy, matplotlib are already in requirements.txt)
