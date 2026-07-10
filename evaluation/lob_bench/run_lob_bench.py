@@ -21,6 +21,7 @@ handoff. LOB-Bench itself is NOT pip-installable — see requirements-eval.txt (
 
 import argparse
 import os
+import shutil
 import sys
 
 import numpy as np
@@ -88,12 +89,12 @@ def main():
     real_dir = os.path.join(args.out_dir, "data_real")
     gen_dir = os.path.join(args.out_dir, "data_gen")
 
-    # NOTE: filename convention reverse-engineered from Simple_Loader's globs
-    #   real:  *message*.csv / *orderbook*.csv ; date = basename.split('_')[1];
-    #          real_id = (substring after 'message').split('_')[0].split('.')[0]
-    #   gen:   *{date}*message*real_id_{id}_gen_id_*.csv
-    # If Simple_Loader fails to pair files, adjust these two lambdas
-    real_name = lambda kind, k: f"INTC_{date}_{kind}{k:02d}.csv"
+    # Filename convention required by Simple_Loader (data_loading.py:318-320):
+    #   before, _, after = rmp.partition('real_id_')
+    #   date_str = before.rsplit('/')[-1].split('_')[1]     → date is the 2nd '_'-token
+    #   real_id  = after.split('_')[0].split('.')[0]        → real file MUST contain 'real_id_{id}'
+    #   gen glob = *{date}*message*real_id_{id}_gen_id_*.csv
+    real_name = lambda kind, k: f"INTC_{date}_{kind}_real_id_{k:02d}.csv"
     gen_name = lambda kind, k: f"INTC_{date}_{kind}_real_id_{k:02d}_gen_id_00.csv"
 
     # Generated first, so we can slice the real data to exactly the generated window.
@@ -109,6 +110,8 @@ def main():
         rm, ro = convert(args.real, window_start=args.window)
     rm, ro = _slice_time(rm, ro, t_lo, t_hi)   # align real to the generated time window
 
+    for d in (real_dir, gen_dir):   # clear stale files — Simple_Loader globs everything in the dir
+        shutil.rmtree(d, ignore_errors=True)
     _write_splits(rm, ro, real_dir, real_name, args.n_splits)
     _write_splits(gm, go, gen_dir, gen_name, args.n_splits)
     print(f"  window {t_lo:.0f}–{t_hi:.0f}s  |  real events={len(rm)}  gen events={len(gm)}  splits={args.n_splits}")
@@ -125,9 +128,13 @@ def main():
   git clone https://github.com/peernagy/lob_bench.git external/lob_bench
   pip install -r external/lob_bench/requirements.txt          # jax, jaxlob, statsmodels, …
 
-Then either run their run_bench.py on these folders, or in Python:
+Score with lob_bench's OWN env, importing its modules top-level (they use flat imports,
+so put the repo DIR on the path — not `from lob_bench import …`):
 
-  from lob_bench import data_loading, scoring, metrics, eval as lbe
+  external/lob_bench_env/bin/python -c '
+  import sys; sys.path.insert(0, "external/lob_bench")
+  import data_loading, scoring, metrics
+  import eval as lbe
   import numpy as np
   loader = data_loading.Simple_Loader("{od}/data_real", "{od}/data_gen", "{od}/data_gen")
   metric_cfg = {{"l1": metrics.l1_by_group, "wasserstein": metrics.wasserstein}}
@@ -138,7 +145,8 @@ Then either run their run_bench.py on these folders, or in Python:
       "ask_volume": {{"fn": lambda m, b: lbe.l1_volume(m, b).ask_vol.values}},
   }}
   scores, score_dfs, plot_fns = scoring.run_benchmark(loader, score_cfg, default_metric=metric_cfg)
-
+  print(scores)   # the L1 / Wasserstein distances per score
+  '
 (cond path is optional — data_gen passed as a harmless placeholder.)""".format(od=args.out_dir))
 
 
