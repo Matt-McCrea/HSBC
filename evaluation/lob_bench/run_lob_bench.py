@@ -13,10 +13,10 @@ message+orderbook CSVs (via to_lobster), lays them out in the folder structure L
 
 By default one whole-session sequence goes in each folder (point estimates, no error bars).
 Use --n-splits N to chop the session into N time-contiguous sequences (restores bootstrapped
-error bars; no conditional-generation machinery needed). --prepare-only stops after writing the
-LOBSTER folders (guaranteed to work) without invoking the lob_bench API.
+error bars; no conditional-generation machinery needed).
 
-Install the benchmark first:  pip install -r requirements-eval.txt
+This writes the LOBSTER folders (data_real/, data_gen/) that LOB-Bench consumes, then prints the
+handoff. LOB-Bench itself is NOT pip-installable — see requirements-eval.txt (clone + jax/jaxlob).
 """
 
 import argparse
@@ -78,20 +78,21 @@ def main():
     ap.add_argument("--out-dir", default="lob_bench_run")
     ap.add_argument("--window", default="09:45", help="keep generated rows at/after HH:MM (drop replay warm-up)")
     ap.add_argument("--n-splits", type=int, default=1, help="sequences per folder (1 = whole session)")
-    ap.add_argument("--prepare-only", action="store_true", help="write LOBSTER folders, skip the benchmark call")
     args = ap.parse_args()
     if not (args.real or args.real_lobster):
         ap.error("supply --real (processed_orders.csv) or --real-lobster (raw LOBSTER file)")
 
     date = _date_str(args.gen)
-    real_dir = os.path.join(args.out_dir, "real")
-    gen_dir = os.path.join(args.out_dir, "generated")
+    # folder names match lob_bench's own run_bench.py convention (data_real/data_gen/data_cond),
+    # so their runner works on --out-dir directly.
+    real_dir = os.path.join(args.out_dir, "data_real")
+    gen_dir = os.path.join(args.out_dir, "data_gen")
 
     # NOTE: filename convention reverse-engineered from Simple_Loader's globs
     #   real:  *message*.csv / *orderbook*.csv ; date = basename.split('_')[1];
     #          real_id = (substring after 'message').split('_')[0].split('.')[0]
     #   gen:   *{date}*message*real_id_{id}_gen_id_*.csv
-    # If Simple_Loader fails to pair files, adjust these two lambdas (and re-run --prepare-only).
+    # If Simple_Loader fails to pair files, adjust these two lambdas
     real_name = lambda kind, k: f"INTC_{date}_{kind}{k:02d}.csv"
     gen_name = lambda kind, k: f"INTC_{date}_{kind}_real_id_{k:02d}_gen_id_00.csv"
 
@@ -113,42 +114,32 @@ def main():
     print(f"  window {t_lo:.0f}–{t_hi:.0f}s  |  real events={len(rm)}  gen events={len(gm)}  splits={args.n_splits}")
     print(f"  example files: {real_name('message',0)} | {gen_name('message',0)}")
 
-    if args.prepare_only:
-        print("\n--prepare-only: LOBSTER folders written. To benchmark:")
-        print("  from lob_bench import data_loading, scoring")
-        print(f"  loader = data_loading.Simple_Loader('{real_dir}', '{gen_dir}', '{gen_dir}')")
-        print("  results = scoring.run_benchmark(loader, score_cfg, metric_cfg)")
-        return
+    # LOBSTER folders are ready. lob_bench is a JAX-based repo (not pip-installable, needs cloning
+    # + jax/jaxlob), and its score_cfg/metric_cfg live in its own run_bench.py — which we do NOT
+    # reconstruct here (it would rot). Hand off to their runner, pointed at our prepared folders.
+    print("\n" + "=" * 70)
+    print("LOBSTER data ready:", args.out_dir, "(data_real/ + data_gen/)")
+    print("=" * 70)
+    print("""To score it with LOB-Bench:
 
-    # ── Invoke the benchmark ──────────────────────────────────────────────────
-    try:
-        from lob_bench import data_loading, scoring
-    except Exception as e:  # noqa: BLE001
-        print(f"\n[!] Could not import lob_bench ({e}).")
-        print("    pip install -r requirements-eval.txt  — or run with --prepare-only and call it yourself.")
-        return
+  git clone https://github.com/peernagy/lob_bench.git external/lob_bench
+  pip install -r external/lob_bench/requirements.txt          # jax, jaxlob, statsmodels, …
 
-    # cond_path is optional; we pass gen_dir as a harmless placeholder (we don't use conditional scores).
-    loader = data_loading.Simple_Loader(real_dir, gen_dir, gen_dir)
+Then either run their run_bench.py on these folders, or in Python:
 
-    # score_cfg / metric_cfg structure is defined by lob_bench — start from their README/example
-    # (e.g. lob_bench's default configs) and pass here. Left as None so the failure is explicit
-    # rather than silently wrong.
-    score_cfg = getattr(scoring, "DEFAULT_SCORE_CFG", None)
-    metric_cfg = getattr(scoring, "DEFAULT_METRIC_CFG", None)
-    if score_cfg is None or metric_cfg is None:
-        print("\n[!] lob_bench imported and LOBSTER folders are ready, but this script does not know "
-              "your score_cfg/metric_cfg. Fill them from lob_bench's example, then call:")
-        print(f"      loader = data_loading.Simple_Loader('{real_dir}', '{gen_dir}', '{gen_dir}')")
-        print("      scoring.run_benchmark(loader, score_cfg, metric_cfg)")
-        return
+  from lob_bench import data_loading, scoring, metrics, eval as lbe
+  import numpy as np
+  loader = data_loading.Simple_Loader("{od}/data_real", "{od}/data_gen", "{od}/data_gen")
+  metric_cfg = {{"l1": metrics.l1_by_group, "wasserstein": metrics.wasserstein}}
+  score_cfg = {{
+      "spread": {{"fn": lambda m, b: lbe.spread(m, b).values, "discrete": True}},
+      "log_inter_arrival_time": {{"fn": lambda m, b: np.log(
+          lbe.inter_arrival_time(m).replace({{0: 1e-9}}).values.astype(float))}},
+      "ask_volume": {{"fn": lambda m, b: lbe.l1_volume(m, b).ask_vol.values}},
+  }}
+  scores, score_dfs, plot_fns = scoring.run_benchmark(loader, score_cfg, default_metric=metric_cfg)
 
-    print("\nRunning benchmark…")
-    results = scoring.run_benchmark(loader, score_cfg, metric_cfg)
-    out = os.path.join(args.out_dir, "results.txt")
-    with open(out, "w") as f:
-        f.write(str(results))
-    print(f"saved {out}")
+(cond path is optional — data_gen passed as a harmless placeholder.)""".format(od=args.out_dir))
 
 
 if __name__ == "__main__":

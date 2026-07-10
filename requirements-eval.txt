@@ -1,4 +1,10 @@
-# Extra dependencies for external evaluation (kept out of the training/sim env).
-# LOB-Bench: standardized synthetic-LOB benchmark (peernagy/lob_bench).
-lob_bench
-# (numpy, pandas, scipy, matplotlib are already in requirements.txt)
+# LOB-Bench (peernagy/lob_bench) is NOT on PyPI and has no setup.py — do not `pip install lob_bench`.
+# It is a JAX-based repo you clone and import:
+#
+#   git clone https://github.com/peernagy/lob_bench.git external/lob_bench
+#   pip install -r external/lob_bench/requirements.txt      # jax, jaxlob, statsmodels, plotly, …
+#
+# Then either add external/ to PYTHONPATH (the repo has __init__.py, so `from lob_bench import …`
+# works when its PARENT dir is on the path), or run lob_bench's own run_bench.py on our folders.
+#
+# Our converter (evaluation/lob_bench/) only needs numpy + pandas, already in requirements.txt.

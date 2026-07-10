@@ -44,3 +44,6 @@ analysis/*.pdf
 analysis/*.aux
 analysis/*.log
 analysis/*.out
+
+# cloned external tools (e.g. lob_bench)
+external/

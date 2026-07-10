@@ -6,9 +6,12 @@ computes Wasserstein-1 / L1 distances on LOB distributions (spread, depth, imbal
 interarrival, cancel depth, …) and **price-impact response curves**.
 
 ## Install
+LOB-Bench is **not** on PyPI (`pip install lob_bench` fails) — it's a JAX-based repo you clone:
 ```sh
-pip install -r requirements-eval.txt
+git clone https://github.com/peernagy/lob_bench.git external/lob_bench
+pip install -r external/lob_bench/requirements.txt      # jax, jaxlob, statsmodels, …
 ```
+Our converter (`to_lobster.py`) only needs numpy + pandas (already installed).
 
 ## Run
 Both inputs are `processed_orders.csv` files (the `world_agent_sim` output format) — one real
@@ -33,8 +36,6 @@ python evaluation/lob_bench/run_lob_bench.py \
 
 - `--n-splits N` chops the session into N contiguous sequences (restores bootstrapped error
   bars; default 1 = one whole-session sequence, point estimates only).
-- `--prepare-only` writes the LOBSTER folders and stops (guaranteed to work) so you can call the
-  `lob_bench` API yourself.
 
 ## Pieces
 - `to_lobster.py` — converts `processed_orders.csv` → LOBSTER message+orderbook CSVs
