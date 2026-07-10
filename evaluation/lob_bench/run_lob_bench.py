@@ -35,6 +35,30 @@ def _date_str(processed_csv):
     return idx[0].strftime("%Y-%m-%d") if not idx.isna().all() else "0000-00-00"
 
 
+def _load_lobster_pair(path):
+    """Load a raw LOBSTER message+orderbook pair from either file's path (already LOBSTER-format,
+    no conversion needed). Returns (message_df with named cols, orderbook_df), row-aligned 1:1."""
+    base = os.path.basename(path)
+    if "message" in base:
+        msg_path, ob_path = path, path.replace("message", "orderbook")
+    elif "orderbook" in base:
+        ob_path, msg_path = path, path.replace("orderbook", "message")
+    else:
+        raise ValueError("--real-lobster path must contain 'message' or 'orderbook'")
+    cols = ["time", "event_type", "order_id", "size", "price", "direction"]
+    m = pd.read_csv(msg_path, header=None).iloc[:, :6]
+    m.columns = cols
+    o = pd.read_csv(ob_path, header=None)
+    n = min(len(m), len(o))  # LOBSTER message/orderbook are 1:1
+    return m.iloc[:n].reset_index(drop=True), o.iloc[:n].reset_index(drop=True)
+
+
+def _slice_time(m, o, t_lo, t_hi):
+    """Slice a (message, orderbook) pair to time ∈ [t_lo, t_hi] (seconds since midnight)."""
+    mask = (m["time"].to_numpy() >= t_lo) & (m["time"].to_numpy() <= t_hi)
+    return m[mask].reset_index(drop=True), o[mask].reset_index(drop=True)
+
+
 def _write_splits(message, orderbook, out_dir, name_fn, n_splits):
     """Write n contiguous (message, orderbook) sequence pairs using name_fn(kind, seq_id)->filename."""
     os.makedirs(out_dir, exist_ok=True)
@@ -47,15 +71,19 @@ def _write_splits(message, orderbook, out_dir, name_fn, n_splits):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--real", required=True, help="real market-replay processed_orders.csv")
+    ap.add_argument("--real", help="real processed_orders.csv (market-replay) — will be converted")
+    ap.add_argument("--real-lobster", help="raw LOBSTER message OR orderbook file — used directly, no conversion "
+                                           "(the natural 'real' source; auto-sliced to the generated window)")
     ap.add_argument("--gen", required=True, help="generated simulation processed_orders.csv")
     ap.add_argument("--out-dir", default="lob_bench_run")
-    ap.add_argument("--window", default="09:45", help="keep rows at/after HH:MM (drop replay warm-up)")
+    ap.add_argument("--window", default="09:45", help="keep generated rows at/after HH:MM (drop replay warm-up)")
     ap.add_argument("--n-splits", type=int, default=1, help="sequences per folder (1 = whole session)")
     ap.add_argument("--prepare-only", action="store_true", help="write LOBSTER folders, skip the benchmark call")
     args = ap.parse_args()
+    if not (args.real or args.real_lobster):
+        ap.error("supply --real (processed_orders.csv) or --real-lobster (raw LOBSTER file)")
 
-    date = _date_str(args.real)
+    date = _date_str(args.gen)
     real_dir = os.path.join(args.out_dir, "real")
     gen_dir = os.path.join(args.out_dir, "generated")
 
@@ -67,13 +95,22 @@ def main():
     real_name = lambda kind, k: f"INTC_{date}_{kind}{k:02d}.csv"
     gen_name = lambda kind, k: f"INTC_{date}_{kind}_real_id_{k:02d}_gen_id_00.csv"
 
-    print(f"Converting real  → {real_dir}")
-    rm, ro = convert(args.real, window_start=args.window)
-    _write_splits(rm, ro, real_dir, real_name, args.n_splits)
+    # Generated first, so we can slice the real data to exactly the generated window.
     print(f"Converting gen   → {gen_dir}")
     gm, go = convert(args.gen, window_start=args.window)
+    t_lo, t_hi = float(gm["time"].min()), float(gm["time"].max())
+
+    if args.real_lobster:
+        print(f"Loading real (raw LOBSTER, no conversion) → {real_dir}")
+        rm, ro = _load_lobster_pair(args.real_lobster)
+    else:
+        print(f"Converting real  → {real_dir}")
+        rm, ro = convert(args.real, window_start=args.window)
+    rm, ro = _slice_time(rm, ro, t_lo, t_hi)   # align real to the generated time window
+
+    _write_splits(rm, ro, real_dir, real_name, args.n_splits)
     _write_splits(gm, go, gen_dir, gen_name, args.n_splits)
-    print(f"  real events={len(rm)}  gen events={len(gm)}  splits={args.n_splits}")
+    print(f"  window {t_lo:.0f}–{t_hi:.0f}s  |  real events={len(rm)}  gen events={len(gm)}  splits={args.n_splits}")
     print(f"  example files: {real_name('message',0)} | {gen_name('message',0)}")
 
     if args.prepare_only:

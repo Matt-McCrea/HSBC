@@ -19,7 +19,18 @@ python evaluation/lob_bench/run_lob_bench.py \
     --gen  ABIDES/log/world_agent_INTC_..._DDPM_.../processed_orders.csv \
     --out-dir lob_bench_run --window 09:45
 ```
+- `--real` takes a processed_orders.csv (converted); **or** use `--real-lobster` (below).
 - `--window 09:45` drops the replay warm-up (keeps the generation phase).
+- `--real-lobster <file>` — use a **raw LOBSTER** message/orderbook file directly for the real
+  side (no conversion; it's already in LOB-Bench format). This is the natural real source and is
+  auto-sliced to the generated window. Give it either the `_message_` or `_orderbook_` file:
+  ```sh
+  python evaluation/lob_bench/run_lob_bench.py \
+      --real-lobster data/INTC/INTC_2015-01-02_2015-01-30_10/INTC_2015-01-30_34140000_57660000_orderbook_10.csv \
+      --gen sweep_results/DDPM_100/DDPM_100_generated_orders.csv \
+      --out-dir lob_bench_run --window 09:45
+  ```
+
 - `--n-splits N` chops the session into N contiguous sequences (restores bootstrapped error
   bars; default 1 = one whole-session sequence, point estimates only).
 - `--prepare-only` writes the LOBSTER folders and stops (guaranteed to work) so you can call the
