@@ -1,10 +1,16 @@
 # LOB-Bench (peernagy/lob_bench) is NOT on PyPI and has no setup.py — do not `pip install lob_bench`.
-# It is a JAX-based repo you clone and import:
+# It is a JAX-based repo you clone and import. Its pinned deps target ~Python 3.9-3.12
+# (NOT 3.13/3.14 — no wheels, source builds fail against NumPy 2 / modern Cython).
 #
 #   git clone https://github.com/peernagy/lob_bench.git external/lob_bench
-#   pip install -r external/lob_bench/requirements.txt      # jax, jaxlob, statsmodels, plotly, …
+#   python3.11 -m venv external/lob_bench_env          # 3.11 (or the remote's 3.9); NOT 3.14
+#   external/lob_bench_env/bin/pip install --upgrade pip
 #
-# Then either add external/ to PYTHONPATH (the repo has __init__.py, so `from lob_bench import …`
-# works when its PARENT dir is on the path), or run lob_bench's own run_bench.py on our folders.
+#   # NOTE: their requirements.txt is internally inconsistent — it pins numpy==2.2.4 but
+#   # matplotlib==3.8.0 needs numpy<2 (and sklearn==1.3.0 breaks under numpy 2 at runtime).
+#   # Downgrade numpy to <2, leaving every other pin intact:
+#   sed 's/numpy==2.2.4/numpy==1.26.4/' external/lob_bench/requirements.txt > /tmp/lb_reqs.txt
+#   external/lob_bench_env/bin/pip install -r /tmp/lb_reqs.txt
 #
-# Our converter (evaluation/lob_bench/) only needs numpy + pandas, already in requirements.txt.
+# Our converter (evaluation/lob_bench/to_lobster.py) only needs numpy + pandas (already installed);
+# run it in any env, then score with external/lob_bench_env/bin/python on the prepared folders.
