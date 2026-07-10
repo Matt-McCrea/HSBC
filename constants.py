@@ -1,5 +1,12 @@
 from enum import Enum
+import os
 import torch
+
+# Keep signed (negative = marketable, spread-crossing) depths in BOTH training preprocessing and
+# simulation conditioning. Default off = original behaviour (depth clamped at 0, so the model never
+# sees a marketable order as a target and can only emit them as sampling noise). Set the env var for
+# an unclamp retrain — and set it identically at simulation time so conditioning matches training.
+UNCLAMP_DEPTH = os.environ.get("UNCLAMP_DEPTH", "0") == "1"
 
 
 class LearningHyperParameter(str, Enum):
@@ -26,6 +33,8 @@ class LearningHyperParameter(str, Enum):
     DDIM_NSTEPS = "ddim_nsteps"
     DDIM_TAIL_STEPS = "ddim_tail_steps"  # for HYBRID_PP_DDIM: number of DDIM steps at the end
     GUIDANCE_SCALE = "guidance_scale"    # classifier-free guidance weight (1.0 = off; needs checkpoint trained with CONDITIONAL_DROPOUT > 0)
+    CHURN_STEPS = "churn_steps"          # CHURN sampler: number of early (high-noise) steps to renoise
+    CHURN_STRENGTH = "churn_strength"    # CHURN sampler: EDM renoise strength κ (0 = pure DPM-Solver++)
     ONE_HOT_ENCODING_TYPE = "one_hot_encoding_type"
     CSDI_SIDE_DIM = "CSDI_side_dim"
     CSDI_CHANNELS = "CSDI_channels"

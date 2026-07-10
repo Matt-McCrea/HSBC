@@ -321,7 +321,7 @@ def preprocess_data(dataframes, n_lob_levels, chosen_model):
             ask_price = ask_sides[index, 0]
             depth = (order_price - ask_price) // 100
         
-        depths[j] = max(depth, 0)
+        depths[j] = depth if cst.UNCLAMP_DEPTH else max(depth, 0)  # UNCLAMP_DEPTH keeps marketable (depth<0)
     
     # Assign the computed depths back to the DataFrame
     dataframes[0]["depth"] = depths

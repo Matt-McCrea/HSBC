@@ -793,13 +793,13 @@ class WorldAgent(Agent):
                 bid_side = lob_dataframe.iloc[index, 2::4]
                 bid_price = bid_side[0]
                 depth = (bid_price - order_price) // 100
-                if depth < 0:
+                if depth < 0 and not cst.UNCLAMP_DEPTH:   # match training: keep signed depth iff unclamped
                     depth = 0
             else:
                 ask_side = lob_dataframe.iloc[index, 0::4]
                 ask_price = ask_side[0]
                 depth = (order_price - ask_price) // 100
-                if depth < 0:
+                if depth < 0 and not cst.UNCLAMP_DEPTH:
                     depth = 0
             orders_dataframe.loc[j, "depth"] = depth
 

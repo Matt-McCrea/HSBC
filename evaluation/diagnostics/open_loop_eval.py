@@ -39,6 +39,8 @@ def parse_args():
     ap.add_argument("--eta", type=float, default=0.0)
     ap.add_argument("--tail-steps", type=int, default=2)
     ap.add_argument("--guidance-scale", type=float, default=1.0)
+    ap.add_argument("--churn-steps", type=int, default=3, help="CHURN: early steps to renoise")
+    ap.add_argument("--churn-strength", type=float, default=0.3, help="CHURN: renoise strength kappa")
     ap.add_argument("--id", type=float, default=None, help="checkpoint val loss (default: best)")
     ap.add_argument("--stock", type=str, default="INTC")
     ap.add_argument("--split", type=str, default="test", choices=["test", "val", "train"])
@@ -71,7 +73,8 @@ def find_checkpoint(symbol, wanted_val_loss):
     return checkpoint_reference
 
 
-def load_model(checkpoint_reference, sampler_type, nsteps, eta, tail_steps, guidance_scale):
+def load_model(checkpoint_reference, sampler_type, nsteps, eta, tail_steps, guidance_scale,
+               churn_steps=3, churn_strength=0.3):
     from models.diffusers.diffusion_engine import DiffusionEngine
     torch.serialization.add_safe_globals(
         [configuration.Configuration, cst.Models, cst.LearningHyperParameter, cst.Stocks, cst.Engine])
@@ -84,6 +87,8 @@ def load_model(checkpoint_reference, sampler_type, nsteps, eta, tail_steps, guid
     config.HYPER_PARAMETERS[cst.LearningHyperParameter.DDIM_NSTEPS] = nsteps
     config.HYPER_PARAMETERS[cst.LearningHyperParameter.DDIM_TAIL_STEPS] = tail_steps
     config.HYPER_PARAMETERS[cst.LearningHyperParameter.GUIDANCE_SCALE] = guidance_scale
+    config.HYPER_PARAMETERS[cst.LearningHyperParameter.CHURN_STEPS] = churn_steps
+    config.HYPER_PARAMETERS[cst.LearningHyperParameter.CHURN_STRENGTH] = churn_strength
     model = DiffusionEngine.load_from_checkpoint(checkpoint_reference, config=config, map_location=cst.DEVICE)
     model.eval()
     for p in model.parameters():
@@ -180,7 +185,8 @@ def main():
         return
 
     model, config = load_model(checkpoint_reference, args.type, args.nsteps,
-                               args.eta, args.tail_steps, args.guidance_scale)
+                               args.eta, args.tail_steps, args.guidance_scale,
+                               args.churn_steps, args.churn_strength)
     seq_size = config.HYPER_PARAMETERS[cst.LearningHyperParameter.SEQ_SIZE]
     gen_seq_size = config.HYPER_PARAMETERS[cst.LearningHyperParameter.MASKED_SEQ_SIZE]
     size_type_emb = config.HYPER_PARAMETERS[cst.LearningHyperParameter.SIZE_TYPE_EMB]
@@ -220,6 +226,7 @@ def main():
     results = {
         "config": {"type": args.type, "nsteps": args.nsteps, "eta": args.eta,
                    "tail_steps": args.tail_steps, "guidance_scale": args.guidance_scale,
+                   "churn_steps": args.churn_steps, "churn_strength": args.churn_strength,
                    "checkpoint": str(checkpoint_reference), "n_windows": n, "split": args.split},
         "real": summarize("REAL next-events", real["type"], real["size"],
                           real["depth"], real["time"], real["direction"]),

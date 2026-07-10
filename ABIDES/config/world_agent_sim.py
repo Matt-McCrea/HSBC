@@ -121,6 +121,16 @@ parser.add_argument('--guidance-scale',
                     help='Classifier-free guidance weight (1.0 = off). w<1 blends toward the marginal '
                          'distribution, w>1 sharpens conditioning. Requires a checkpoint trained with '
                          'CONDITIONAL_DROPOUT > 0. Doubles NN evaluations per step when != 1.0.')
+parser.add_argument('--churn-steps',
+                    type=int,
+                    default=3,
+                    help='CHURN sampler: number of early (high-noise) steps to apply EDM renoise on')
+parser.add_argument('--churn-strength',
+                    type=float,
+                    default=0.3,
+                    help='CHURN sampler: EDM renoise strength kappa in [0,0.9] (0 = pure DPM-Solver++). '
+                         'Re-injects entropy on the early steps our HYBRID_DDPM_PP result showed set '
+                         'the marketable-order diversity, at few-step (DPM++) accuracy on the tail.')
 parser.add_argument('--real-data-path',
                     type=str,
                     default=None,
@@ -278,6 +288,8 @@ if args.diffusion:
     config.HYPER_PARAMETERS[cst.LearningHyperParameter.DDIM_NSTEPS] = args.ddim_nsteps
     config.HYPER_PARAMETERS[cst.LearningHyperParameter.DDIM_TAIL_STEPS] = args.tail_steps
     config.HYPER_PARAMETERS[cst.LearningHyperParameter.GUIDANCE_SCALE] = args.guidance_scale
+    config.HYPER_PARAMETERS[cst.LearningHyperParameter.CHURN_STEPS] = args.churn_steps
+    config.HYPER_PARAMETERS[cst.LearningHyperParameter.CHURN_STRENGTH] = args.churn_strength
     if config.CHOSEN_MODEL == cst.Models.TRADES:
         # load checkpoint
         model = DiffusionEngine.load_from_checkpoint(checkpoint_reference, config=config, map_location=cst.DEVICE)

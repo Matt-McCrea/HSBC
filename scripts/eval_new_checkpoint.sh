@@ -1,44 +1,52 @@
 #!/bin/bash
-# eval_new_checkpoint.sh — decisive tests for the dropout-retrained checkpoint.
+# eval_new_checkpoint.sh — closed-loop battery, now loopable over MULTIPLE checkpoints.
 #
-# THE QUESTION: did better calibration (dropout, val 0.681→0.656) un-collapse the depth
-# distribution and unfreeze the fast/deterministic samplers? Old checkpoint 0.681 gave
-# DDIM-10 η=0: 72% of orders at depth 0, 0% marketable, 6 unique mids (FROZEN). We want to
-# see the depth histogram spread out and the mid-price move.
+# THE QUESTION (unchanged): does the sampler-collapse freeze depend on checkpoint quality?
+# Old 0.681 DDIM-10 η=0: 72% depth-0, 6 mids (frozen). New 0.656 (dropout retrain) is NO better
+# (see new_ckpt.md: 9-17 mids, 78-84% depth-0). So now we sweep checkpoints to map sensitivity.
 #
-# Runs in information-per-minute order (headline tests first; slow DDPM reference last), so a
-# short session still answers the big question. Resumable; each run appends flow_mix + the
-# depth histogram to summary.md.
+# Per checkpoint it runs a LEAN, information-ordered battery:
+#   DDPM_100          — positive control (stochastic, should move) — added back this round
+#   DDIM10_eta0       — negative control (deterministic, should freeze)
+#   HYBRID_DDPM_PP_8+2— the early-stochasticity lever (unfroze the OLD ckpt; did it regress?)
+# then an OPTIONAL fuller set (CFG g1.5/g0.7, DPMpp) only if --full is passed.
 #
-# Usage (auto-selects the best/lowest-val checkpoint in data/checkpoints/TRADES/):
+# Resumable (per-checkpoint .done sentinels). Ctrl-C any time; rerun resumes.
+#
+# Usage — sweep a curated bracket of checkpoints (best → mid → old → exploder → untrained):
 #   bash scripts/eval_new_checkpoint.sh \
-#       --real ABIDES/log/market_replay_INTC_2015-01-30_10-00-00_30/processed_orders.csv
-# Pin a specific checkpoint:  --id 0.656
+#       --real ABIDES/log/market_replay_INTC_2015-01-30_10-00-00_30/processed_orders.csv \
+#       --ids "0.656 0.671 0.681 0.719 2.869"
+# Single checkpoint, full battery (adds CFG + DPMpp):
+#   bash scripts/eval_new_checkpoint.sh --real <csv> --ids 0.656 --full
+# Auto/best checkpoint only:  (omit --ids)
 #
-# WATCH in summary.md, per run:  DIAG depth_pre_drop (neg / 0 fractions) and unique mid-prices.
-#   OLD 0.681 DDIM-10 η=0:  neg~0%, 0=72%, 6 mids (frozen)
-#   TARGET (DDPM / real):   neg~3-24%, depth spread across levels, dozens of mids
+# WATCH per run in summary.md:  DIAG depth_pre_drop (neg / 0 fractions) + unique mid count.
+#   FROZEN  ~72-84% at depth 0, <20 mids  |  MOVING (DDPM/real) depth spread, dozens of mids
 
 set -uo pipefail
 TICKER="INTC"; DATE="20150130"; ST="09:30:00"; ET="10:00:00"
-REAL=""; ID=""; OUT_DIR="eval_new_ckpt/$(date +%Y%m%d_%H%M%S)"
+REAL=""; IDS=""; FULL=0; OUT_ROOT="eval_new_ckpt/$(date +%Y%m%d_%H%M%S)"
 while [[ $# -gt 0 ]]; do case "$1" in
-  --real) REAL="$2"; shift 2;; --id) ID="$2"; shift 2;;
+  --real) REAL="$2"; shift 2;;
+  --ids)  IDS="$2";  shift 2;;      # space-separated list of val-loss ids; empty = auto/best
+  --id)   IDS="$2";  shift 2;;      # alias, single id
+  --full) FULL=1; shift;;           # add CFG (g1.5/g0.7) + DPMpp per checkpoint
   --start) ST="$2"; shift 2;; --end) ET="$2"; shift 2;;
-  --out-dir) OUT_DIR="$2"; shift 2;;
+  --out-dir) OUT_ROOT="$2"; shift 2;;
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
-mkdir -p "$OUT_DIR/logs"; SUM="$OUT_DIR/summary.md"
-echo "# New-checkpoint eval — $(date '+%F %T')  (id=${ID:-auto/best})" > "$SUM"; echo "" >> "$SUM"
+[[ -z "$IDS" ]] && IDS="__auto__"   # sentinel = let world_agent_sim pick best/lowest val
 
-run () { # run <tag> <type> <nsteps> <eta> <extra>
-  local TAG="$1" TYPE="$2" NS="$3" ETA="$4" EXTRA="$5"
+run () { # run <out_dir> <id> <tag> <type> <nsteps> <eta> <extra>
+  local OUT_DIR="$1" ID="$2" TAG="$3" TYPE="$4" NS="$5" ETA="$6" EXTRA="$7"
+  local SUM="$OUT_DIR/summary.md"
   local LOG="$OUT_DIR/logs/${TAG}.txt"; local DONE="$OUT_DIR/logs/.done_${TAG}"
   [[ -f "$DONE" ]] && { echo "  SKIP $TAG"; return; }
   echo "── $TAG"
   local S; S=$(mktemp); touch "$S"; local T0; T0=$(date +%s)
   local A=(python ABIDES/abides.py -c world_agent_sim -t "$TICKER" -date "$DATE" -st "$ST" -et "$ET"
            -d True -m TRADES -type "$TYPE" -nsteps "$NS" -eta "$ETA")
-  [[ -n "$ID" ]] && A+=(-id "$ID")
+  [[ "$ID" != "__auto__" ]] && A+=(-id "$ID")
   # shellcheck disable=SC2206
   [[ -n "$EXTRA" ]] && A+=($EXTRA)
   echo "   ${A[*]}"
@@ -54,24 +62,31 @@ run () { # run <tag> <type> <nsteps> <eta> <extra>
   touch "$DONE"; echo "  done ${SECS}s"
 }
 
-echo "════ STAGE 1: the headline — did the freeze get fixed? ════"
-echo "# Stage 1 — freeze test (fast)" >> "$SUM"
-run "DDIM10_eta0"        DDIM 10 0.0 ""                          # SAME config that froze on 0.681
-run "HYBRID_DDPM_PP_8+2" HYBRID_DDPM_PP 10 0.0 "--tail-steps 2" # stochastic head (drifted on 0.681)
+for ID in $IDS; do
+  TAGID=$([[ "$ID" == "__auto__" ]] && echo "auto" || echo "$ID")
+  OUT_DIR="$OUT_ROOT/ckpt_${TAGID}"; mkdir -p "$OUT_DIR/logs"; SUM="$OUT_DIR/summary.md"
+  echo "# Checkpoint $TAGID — $(date '+%F %T')" > "$SUM"; echo "" >> "$SUM"
+  echo ""; echo "████ CHECKPOINT ${TAGID} ████"
 
-echo "════ STAGE 2: classifier-free guidance (unlocked by the dropout retrain) ════"
-echo "# Stage 2 — CFG (note: guidance != 1.0 doubles NFE)" >> "$SUM"
-run "DDIM10_eta0_g1.5"  DDIM 10 0.0 "--guidance-scale 1.5"      # sharpen conditioning
-run "DDIM10_eta0_g0.7"  DDIM 10 0.0 "--guidance-scale 0.7"      # toward the marginal (more diversity)
+  echo "════ STAGE 1: controls — DDPM (should move) vs DDIM (should freeze) ════"
+  run "$OUT_DIR" "$ID" "DDPM_100"          DDPM 100 0.0 ""                          # positive control
+  run "$OUT_DIR" "$ID" "DDIM10_eta0"       DDIM 10  0.0 ""                          # negative control
+  run "$OUT_DIR" "$ID" "HYBRID_DDPM_PP_8+2" HYBRID_DDPM_PP 10 0.0 "--tail-steps 2" # early-stochastic lever
+  run "$OUT_DIR" "$ID" "CHURN_10_s3_k0.3"  CHURN 10 0.0 "--churn-steps 3 --churn-strength 0.3"  # NEW: tunable early churn
+  run "$OUT_DIR" "$ID" "CHURN_10_s4_k0.5"  CHURN 10 0.0 "--churn-steps 4 --churn-strength 0.5"  # NEW: stronger churn
 
-echo "════ STAGE 3: fast ODE ════"
-echo "# Stage 3 — fast ODE" >> "$SUM"
-run "DPM_SOLVER_PP_10"  DPM_SOLVER_PP 10 0.0 ""
-# (DDPM-100 reference dropped — confirmatory only; compare depth against real / TRADES-LOB instead)
+  if [[ "$FULL" == "1" ]]; then
+    echo "════ STAGE 2: classifier-free guidance ════"
+    run "$OUT_DIR" "$ID" "DDIM10_eta0_g1.5" DDIM 10 0.0 "--guidance-scale 1.5"
+    run "$OUT_DIR" "$ID" "DDIM10_eta0_g0.7" DDIM 10 0.0 "--guidance-scale 0.7"
+    echo "════ STAGE 3: fast ODE ════"
+    run "$OUT_DIR" "$ID" "DPM_SOLVER_PP_10" DPM_SOLVER_PP 10 0.0 ""
+  fi
+done
 
 echo ""; echo "══════════════════════════════════════════"
-echo "  Done. Summary: $SUM"
+echo "  Done. Summaries under: $OUT_ROOT/ckpt_*/summary.md"
 echo "══════════════════════════════════════════"
-echo "READ: compare each run's  DIAG depth_pre_drop  and unique mid count against"
-echo "  OLD 0.681 DDIM-10 η=0 (neg~0%, 72% at depth 0, 6 mids). If the new checkpoint's"
-echo "  DDIM-10 spreads depth and moves the mid, better calibration fixed it."
+echo "READ: per checkpoint, does DDPM_100 stay MOVING while DDIM10 FREEZES? If the freeze"
+echo "  persists across ALL checkpoints (incl. best 0.656 and untrained 2.869), it's a"
+echo "  sampler-intrinsic collapse, not a training-maturity artifact."
