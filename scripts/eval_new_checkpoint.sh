@@ -64,10 +64,10 @@ echo "# Stage 2 — CFG (note: guidance != 1.0 doubles NFE)" >> "$SUM"
 run "DDIM10_eta0_g1.5"  DDIM 10 0.0 "--guidance-scale 1.5"      # sharpen conditioning
 run "DDIM10_eta0_g0.7"  DDIM 10 0.0 "--guidance-scale 0.7"      # toward the marginal (more diversity)
 
-echo "════ STAGE 3: fast ODE + DDPM reference ════"
-echo "# Stage 3 — fast ODE + reference" >> "$SUM"
+echo "════ STAGE 3: fast ODE ════"
+echo "# Stage 3 — fast ODE" >> "$SUM"
 run "DPM_SOLVER_PP_10"  DPM_SOLVER_PP 10 0.0 ""
-run "DDPM100_reference" DDPM 100 0.0 ""                          # this ckpt's 'gold' depth profile (slow)
+# (DDPM-100 reference dropped — confirmatory only; compare depth against real / TRADES-LOB instead)
 
 echo ""; echo "══════════════════════════════════════════"
 echo "  Done. Summary: $SUM"
