@@ -785,10 +785,11 @@ class WorldAgent(Agent):
             order_price = orders_dataframe["price"].iloc[j]
             direction = orders_dataframe["direction"].iloc[j]
             type = orders_dataframe["event_type"].iloc[j]
-            if type == 1:
-                index = j + 1
-            else:
-                index = j
+            # ALWAYS the pre-event snapshot (lob_dataframe carries one leading row, so index=j is
+            # "before orders[j]"). index=j+1 for type==1 was the post-event snapshot — self-referential
+            # for a marketable order resting its own remainder (see utils_data.py's matching fix and
+            # scripts/check_raw_depth_distribution.py).
+            index = j
             if direction == 1:
                 bid_side = lob_dataframe.iloc[index, 2::4]
                 bid_price = bid_side[0]

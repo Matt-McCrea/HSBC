@@ -312,8 +312,15 @@ def preprocess_data(dataframes, n_lob_levels, chosen_model):
         direction = directions[j]
         event_type = event_types[j]
         
-        index = j if event_type == 1 else j - 1
-        
+        # ALWAYS the pre-event orderbook snapshot (LOBSTER's orderbook row j = state AFTER message
+        # row j, so j-1 is "before"). Using index=j for event_type==1 (post-event) was
+        # self-referential: a marketable order that rests its own remainder becomes the new best
+        # bid/ask it's being compared against, washing depth to 0 instead of negative — which is why
+        # UNCLAMP_DEPTH found zero negatives in real data regardless of the clamp (confirmed via
+        # scripts/check_raw_depth_distribution.py: 0.00% negative before this fix, 0.91% of LIMIT
+        # events after).
+        index = j - 1
+
         if direction == 1:
             bid_price = bid_sides[index, 0]
             depth = (bid_price - order_price) // 100
