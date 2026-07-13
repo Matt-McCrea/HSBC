@@ -4,9 +4,17 @@ import torch
 
 # Keep signed (negative = marketable, spread-crossing) depths in BOTH training preprocessing and
 # simulation conditioning. Default off = original behaviour (depth clamped at 0, so the model never
-# sees a marketable order as a target and can only emit them as sampling noise). Set the env var for
-# an unclamp retrain — and set it identically at simulation time so conditioning matches training.
-UNCLAMP_DEPTH = os.environ.get("UNCLAMP_DEPTH", "0") == "1"
+# sees a marketable order as a target and can only emit them as sampling noise).
+#
+# Two ways to turn this on — checked in order:
+#   1. env var UNCLAMP_DEPTH=1 (works when your launcher actually propagates env vars to the python
+#      subprocess — some HPC job launchers/srun/sbatch configs do NOT, silently).
+#   2. a FILE named UNCLAMP_DEPTH_FLAG in the current working directory (repo root). This is the
+#      robust option: a file on disk survives any launcher, since it doesn't depend on process
+#      environment propagation at all. scripts/unclamp_retrain.sh creates/removes it for you.
+# Whichever is on, it must be on identically at BOTH training and simulation time so the depth
+# conditioning matches what the model was trained on.
+UNCLAMP_DEPTH = (os.environ.get("UNCLAMP_DEPTH", "0") == "1") or os.path.exists("UNCLAMP_DEPTH_FLAG")
 
 
 class LearningHyperParameter(str, Enum):

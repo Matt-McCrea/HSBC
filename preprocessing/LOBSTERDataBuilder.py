@@ -24,6 +24,9 @@ class LOBSTERDataBuilder:
         self.chosen_model = chosen_model
 
     def prepare_save_datasets(self):
+        print(f"[LOBSTERDataBuilder] cst.UNCLAMP_DEPTH = {cst.UNCLAMP_DEPTH}  "
+              f"(depth clamp {'OFF — signed depth' if cst.UNCLAMP_DEPTH else 'ON — clamped at 0'})",
+              flush=True)
         path = "{}/{}/{}_{}_{}".format(
             self.data_dir,
             self.stock_name,

@@ -93,29 +93,34 @@ deterministic) freezes the market.
 **The fix (already implemented, flag-gated OFF by default).** `constants.UNCLAMP_DEPTH` reads env var
 `UNCLAMP_DEPTH`; when set, both the preprocessing clamp and the conditioning clamp keep signed depth.
 Default unset ⇒ original clamped behaviour, so nothing changes until you opt in.
-- `constants.py` — `UNCLAMP_DEPTH = os.environ.get("UNCLAMP_DEPTH","0")=="1"`
+- `constants.py` — `UNCLAMP_DEPTH = (env UNCLAMP_DEPTH=="1") or os.path.exists("UNCLAMP_DEPTH_FLAG")`
 - `utils/utils_data.py:324` — `depths[j] = depth if cst.UNCLAMP_DEPTH else max(depth,0)`
 - `ABIDES/agent/WorldAgent.py:796/802` — `if depth < 0 and not cst.UNCLAMP_DEPTH: depth = 0`
+
+**Two env-var-only attempts failed silently** — training ran to completion on ordinary clamped data
+both times, because whatever wraps the booked-GPU-session launch on this remote doesn't propagate
+arbitrary env vars through to the `python` subprocess. `UNCLAMP_DEPTH` is now also gated on a **file**,
+`UNCLAMP_DEPTH_FLAG` in the repo root — a file on disk survives any launcher, since it only depends on
+cwd, not process environment. `scripts/unclamp_retrain.sh` now pre-flight-checks the mechanism (under
+2 seconds) before launching anything, so a broken path is caught immediately instead of after hours.
 
 Unclamping shifts μ_depth down and widens σ_depth, so it **requires reprocessing** (regenerates the
 `.npy` + normalization stats). The retrain shell handles backup + reprocess + train:
 
 ```sh
 # ensure configuration.py has IS_DATA_PREPROCESSED = False first
-bash scripts/unclamp_retrain.sh          # backs up clamped data, launches reprocess+train (background)
+bash scripts/unclamp_retrain.sh          # pre-flight check, backup, launch reprocess+train (background)
 bash scripts/unclamp_retrain.sh --check  # ~1-2 min later: confirm depth stats actually shifted
-# ...then evaluate with the SAME var, INLINED (not exported) so it can't be lost to a shell/session
-# boundary the way training's first attempt was:
-UNCLAMP_DEPTH=1 bash scripts/open_loop_sweep.sh      --ids "<new-val-loss-id>"
-UNCLAMP_DEPTH=1 bash scripts/eval_new_checkpoint.sh  --real <replay csv> --ids "<new-val-loss-id>"
-bash scripts/unclamp_retrain.sh --restore   # roll back to the clamped baseline data if needed
+# ...then evaluate — the flag FILE persists automatically, no need to set anything per-command:
+bash scripts/open_loop_sweep.sh      --ids "<new-val-loss-id>"
+bash scripts/eval_new_checkpoint.sh  --real <replay csv> --ids "<new-val-loss-id>"
+bash scripts/unclamp_retrain.sh --restore   # removes the flag file + rolls back the clamped data
 ```
 
-> ⚠️ `UNCLAMP_DEPTH=1` must be set at **simulation** time too, not just training — otherwise the
-> conditioning depth is clamped while the model expects signed depth (train/sim mismatch). **Inline
-> it** (`VAR=1 command`), don't `export` it — that's exactly how the first training attempt silently
-> ran on clamped data: the export happened in a shell that wasn't the one `python main.py` actually
-> ran in (background job / new session). Inlining ties the var to that one process, guaranteed.
+> ⚠️ The unclamp must be on at **simulation** time too, not just training — otherwise the
+> conditioning depth is clamped while the model expects signed depth (train/sim mismatch). The flag
+> file makes this automatic: once `unclamp_retrain.sh` creates it, every script run from this repo
+> root picks it up until `--restore` removes it — nothing to remember per-command anymore.
 
 **Expected outcome / success criteria.** After the unclamp retrain, `depth_pre_drop` should show a
 genuine **negative bucket** (marketable orders the model learned, not sampled by accident), and the

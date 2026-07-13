@@ -1,3 +1,4 @@
+import os
 import random
 import numpy as np
 import wandb
@@ -50,7 +51,10 @@ def plot_graphs(real_data_path=None, TRADES_data_path=None, iabs_data_path=None,
 if __name__ == "__main__":
     set_torch()
     set_repoducibility()
-    
+    print(f"[main.py] cst.UNCLAMP_DEPTH = {cst.UNCLAMP_DEPTH}  "
+          f"(env UNCLAMP_DEPTH={os.environ.get('UNCLAMP_DEPTH')!r}, "
+          f"flag file present={os.path.exists('UNCLAMP_DEPTH_FLAG')})", flush=True)
+
     config = configuration.Configuration()
     if (cst.DEVICE == "cpu"):
         accelerator = "cpu"
