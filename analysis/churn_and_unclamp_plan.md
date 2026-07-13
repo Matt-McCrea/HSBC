@@ -102,16 +102,20 @@ Unclamping shifts μ_depth down and widens σ_depth, so it **requires reprocessi
 
 ```sh
 # ensure configuration.py has IS_DATA_PREPROCESSED = False first
-bash scripts/unclamp_retrain.sh          # exports UNCLAMP_DEPTH=1, backs up clamped data, reprocess+train
-# ...then evaluate with the SAME env var so conditioning matches training:
-export UNCLAMP_DEPTH=1
-bash scripts/open_loop_sweep.sh      --ids "<new-val-loss-id>"
-bash scripts/eval_new_checkpoint.sh  --real <replay csv> --ids "<new-val-loss-id>"
+bash scripts/unclamp_retrain.sh          # backs up clamped data, launches reprocess+train (background)
+bash scripts/unclamp_retrain.sh --check  # ~1-2 min later: confirm depth stats actually shifted
+# ...then evaluate with the SAME var, INLINED (not exported) so it can't be lost to a shell/session
+# boundary the way training's first attempt was:
+UNCLAMP_DEPTH=1 bash scripts/open_loop_sweep.sh      --ids "<new-val-loss-id>"
+UNCLAMP_DEPTH=1 bash scripts/eval_new_checkpoint.sh  --real <replay csv> --ids "<new-val-loss-id>"
 bash scripts/unclamp_retrain.sh --restore   # roll back to the clamped baseline data if needed
 ```
 
-> ⚠️ `UNCLAMP_DEPTH=1` must be exported at **simulation** time too, not just training — otherwise the
-> conditioning depth is clamped while the model expects signed depth (train/sim mismatch).
+> ⚠️ `UNCLAMP_DEPTH=1` must be set at **simulation** time too, not just training — otherwise the
+> conditioning depth is clamped while the model expects signed depth (train/sim mismatch). **Inline
+> it** (`VAR=1 command`), don't `export` it — that's exactly how the first training attempt silently
+> ran on clamped data: the export happened in a shell that wasn't the one `python main.py` actually
+> ran in (background job / new session). Inlining ties the var to that one process, guaranteed.
 
 **Expected outcome / success criteria.** After the unclamp retrain, `depth_pre_drop` should show a
 genuine **negative bucket** (marketable orders the model learned, not sampled by accident), and the
