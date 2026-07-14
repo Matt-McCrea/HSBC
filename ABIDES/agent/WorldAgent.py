@@ -84,6 +84,13 @@ class WorldAgent(Agent):
         # ── Diagnostics (always on, cheap counters) ──
         self.decoded_type_counts = {1: 0, 3: 0, 4: 0}  # pre-drop decode histogram (1=limit,3=cancel,4=market)
         self.depth_hist = {"neg": 0, "0": 0, "1-2": 0, "3-5": 0, "6+": 0}  # pre-drop generated-depth histogram
+        # pre-drop generated-size histogram + running mean/std, split by decoded type (limit/market) —
+        # tests whether SIZE is a second, independent collapse axis compounding the "wall" symptom
+        # alongside depth: even a correct rate of spread-crossing market orders can't move price if
+        # resting size at the touch is systematically oversized/collapsed to a narrow high band.
+        _sz_buckets = {"0-50": 0, "51-200": 0, "201-500": 0, "501-1000": 0, ">1000": 0, "neg": 0}
+        self.size_hist = {"limit": dict(_sz_buckets), "cancel": dict(_sz_buckets), "market": dict(_sz_buckets)}
+        self.size_stats = {"limit": [0.0, 0.0, 0], "cancel": [0.0, 0.0, 0], "market": [0.0, 0.0, 0]}  # [sum, sumsq, n]
         self.drop_counts = {"size_range": 0, "limit_out_of_depth": 0,
                             "cancel_no_best": 0, "cancel_side_empty": 0}
         self.resample_total_batches = 0
@@ -124,6 +131,15 @@ class WorldAgent(Agent):
         print("DIAG depth_pre_drop: neg={} 0={} 1-2={} 3-5={} 6+={}".format(
             self.depth_hist["neg"], self.depth_hist["0"], self.depth_hist["1-2"],
             self.depth_hist["3-5"], self.depth_hist["6+"]))
+        for k in ("limit", "cancel", "market"):
+            h = self.size_hist[k]
+            s = self.size_stats[k]
+            mean = s[0] / s[2] if s[2] else float("nan")
+            std = ((s[1] / s[2]) - mean ** 2) ** 0.5 if s[2] else float("nan")
+            print("DIAG size_pre_drop[{}]: neg={} 0-50={} 51-200={} 201-500={} 501-1000={} >1000={}  "
+                  "mean={:.1f} std={:.1f} n={}".format(
+                      k, h["neg"], h["0-50"], h["51-200"], h["201-500"], h["501-1000"], h[">1000"],
+                      mean, std, s[2]))
         for feat, s in sorted(self.cond_stats.items()):
             mean = s[2] / s[3] if s[3] else float("nan")
             print("DIAG cond_z[{}]: min={:.2f} mean={:.2f} max={:.2f} n={}".format(feat, s[0], mean, s[1], s[3]))
@@ -588,6 +604,21 @@ class WorldAgent(Agent):
 
         # we return the size and the time to the original scale
         size = round(generated[self.size_type_emb+1].item() * self.normalization_terms["event"][1] + self.normalization_terms["event"][0], ndigits=0)
+
+        # Pre-drop size histogram + running mean/std, split limit vs market. Real markets have
+        # depth0~58.6% too (concentration at the touch isn't itself abnormal) — the sharper gap is
+        # execution rate (real/DDPM ~7-8% vs deterministic samplers ~3.7-5%) and the absolute wall
+        # sizes (40k-200k share means vs real ~2-4k). This checks whether SIZE independently
+        # collapses to a narrow/high band under deterministic sampling, compounding the wall
+        # regardless of depth's sign.
+        _sk = {1: "limit", 3: "cancel", 4: "market"}[order_type]
+        if size < 0:        self.size_hist[_sk]["neg"] += 1
+        elif size <= 50:     self.size_hist[_sk]["0-50"] += 1
+        elif size <= 200:    self.size_hist[_sk]["51-200"] += 1
+        elif size <= 500:    self.size_hist[_sk]["201-500"] += 1
+        elif size <= 1000:   self.size_hist[_sk]["501-1000"] += 1
+        else:                self.size_hist[_sk][">1000"] += 1
+        self.size_stats[_sk][0] += size; self.size_stats[_sk][1] += size * size; self.size_stats[_sk][2] += 1
         # depth_temp: scale the decoded depth z-score before denormalizing. Training clamped
         # depth to >=0, so the model piles its depth output near 0 (passive); only sampling
         # variance spilling below 0 produces marketable orders that execute and move price.
