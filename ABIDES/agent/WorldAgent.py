@@ -91,6 +91,14 @@ class WorldAgent(Agent):
         _sz_buckets = {"0-50": 0, "51-200": 0, "201-500": 0, "501-1000": 0, ">1000": 0, "neg": 0}
         self.size_hist = {"limit": dict(_sz_buckets), "cancel": dict(_sz_buckets), "market": dict(_sz_buckets)}
         self.size_stats = {"limit": [0.0, 0.0, 0], "cancel": [0.0, 0.0, 0], "market": [0.0, 0.0, 0]}  # [sum, sumsq, n]
+        # Channel A vs Channel B: type==4 ("market") always executes via placeMarketOrder,
+        # bypassing depth entirely. type==1 ("limit") only executes if its price genuinely
+        # crosses the CURRENT opposite-side best price, via the exchange's real matching engine
+        # (OrderBook.isMatch/executeOrder). Depth-sign fixes (unclamp/quantile-match) only ever
+        # strengthen Channel B; they do nothing for Channel A. Measuring the current split tells
+        # us which channel the execution-rate shortfall (real ~7.0% vs deterministic ~3.7-5.0%)
+        # is actually coming from, before investing more effort in reshaping depth specifically.
+        self.channel_b_would_cross = 0    # decoded type==1 orders whose price crosses the book NOW
         self.drop_counts = {"size_range": 0, "limit_out_of_depth": 0,
                             "cancel_no_best": 0, "cancel_side_empty": 0}
         self.resample_total_batches = 0
@@ -121,6 +129,10 @@ class WorldAgent(Agent):
             self.decoded_type_counts[1], self.decoded_type_counts[3], self.decoded_type_counts[4]))
         print("DIAG placed: limit={} cancel={} market={}".format(
             self.diff_limit_order_placed, self.diff_cancel_order_placed, self.diff_market_order_placed))
+        print("DIAG execution_channels: A_market_order={}  B_crossing_limit={}  (A bypasses depth entirely "
+              "via placeMarketOrder; B only fires if a decoded LIMIT price crosses the book NOW, via the "
+              "exchange's real matching engine — this is the only channel depth-sign fixes can affect)".format(
+                  self.diff_market_order_placed, self.channel_b_would_cross))
         print("DIAG drops: size_range={} limit_out_of_depth={} cancel_no_best={} cancel_side_empty={}".format(
             self.drop_counts["size_range"], self.drop_counts["limit_out_of_depth"],
             self.drop_counts["cancel_no_best"], self.drop_counts["cancel_side_empty"]))
@@ -669,6 +681,10 @@ class WorldAgent(Agent):
                     self.drop_counts["limit_out_of_depth"] += 1
                     return None
                 self.diff_limit_order_placed += 1
+                # Channel B check: a buy limit crosses if priced >= the CURRENT best ask.
+                current_ask = self.lob_snapshots[-1][0::4][0]
+                if current_ask > 0 and price >= current_ask:
+                    self.channel_b_would_cross += 1
             else:
                 ask_side = self.lob_snapshots[-1][0::4]
                 ask_price = ask_side[0]
@@ -683,6 +699,10 @@ class WorldAgent(Agent):
                     self.drop_counts["limit_out_of_depth"] += 1
                     return None
                 self.diff_limit_order_placed += 1
+                # Channel B check: a sell limit crosses if priced <= the CURRENT best bid.
+                current_bid = self.lob_snapshots[-1][2::4][0]
+                if current_bid > 0 and price <= current_bid:
+                    self.channel_b_would_cross += 1
 
         elif order_type == 3:
             if direction == 1:
