@@ -1,4 +1,5 @@
 import os
+from collections import deque
 from copy import deepcopy
 
 from scipy import stats
@@ -31,7 +32,7 @@ class WorldAgent(Agent):
     def __init__(self, id, name, type, symbol, date, date_trading_days, model, data_dir, log_orders=True, random_state=None, normalization_terms=None,
                  using_diffusion=False, chosen_model=None, seq_len=256, cond_seq_size=255, cond_type='full', size_type_emb=3, gen_seq_size=1,
                  fix_time=False, type_decode='l1', fix_cancel_bind=False, fix_lob_pad=False, drop_type2_cond=False,
-                 depth_temp=1.0):
+                 depth_temp=1.0, depth_reshape=None, size_reshape=None, depth_noise=0.0):
 
         super().__init__(id, name, type, random_state=random_state, log_to_file=log_orders)
         self.count_neg_size = 0
@@ -78,6 +79,36 @@ class WorldAgent(Agent):
         self.fix_lob_pad = fix_lob_pad            # H5: sentinel-pad empty LOB levels pre-z-score (match training)
         self.drop_type2_cond = drop_type2_cond    # H7: exclude partial cancels from conditioning (match training)
         self.depth_temp = depth_temp              # scale decoded depth z (kappa>1 restores the marketable tail)
+        # ── Quantile reshape (decode-time distribution repair; no retrain, no sampler change) ──
+        # WHY: the unclamp retrain fixed the SIGN axis of the depth collapse (negative-depth
+        # decodes rose 11x on ckpt 0.635) but not the MAGNITUDE axis — DDIM10's B_crossing_limit
+        # stayed exactly 0 because deterministic sampling collapses depth's variance, so the rare
+        # negative excursions are too small to exceed the current spread. Quantile matching maps
+        # each raw z through its rank within the model's OWN recent output distribution (a rolling
+        # buffer — self-calibrating in closed loop), then reads that same quantile off the REAL
+        # empirical marginal (scripts/build_quantile_targets.py). Unlike --depth-temp (linear scale
+        # of a spike => cliff), this is a nonlinear map that uses the continuous intra-spike
+        # variation as ranking signal: the bottom ~0.9% of ranks land on genuine -1..-10 tick
+        # crossing depths with REAL magnitudes. Midrank tie-handling makes it fail-safe: a fully
+        # degenerate source (all z equal) maps to the target's MEDIAN (depth 0), not an extreme.
+        self.depth_noise = depth_noise            # per-sample N(0,sigma) on z_depth at decode (LIMIT only)
+        self._reshape_warmup = 300                # plain decode until the source buffer has this many z's
+        self.depth_reshape_target = None          # sorted real signed-depth array (LIMIT events only)
+        if depth_reshape:
+            self.depth_reshape_target = np.load(depth_reshape).astype(np.float64)
+            self._depth_qgrid = np.linspace(0.0, 1.0, self.depth_reshape_target.size)
+            self._z_depth_buf = deque(maxlen=2000)
+            print(f"[WorldAgent] depth reshape ON: target={depth_reshape} n={self.depth_reshape_target.size} "
+                  f"neg={(self.depth_reshape_target < 0).mean():.3%}")
+        self.size_reshape_targets = None          # per-decoded-type sorted real size arrays, [0,1000]
+        if size_reshape:
+            self.size_reshape_targets = {}
+            for k in ("limit", "cancel", "market"):
+                t = np.load(os.path.join(size_reshape, f"real_size_{k}.npy")).astype(np.float64)
+                self.size_reshape_targets[k] = (t, np.linspace(0.0, 1.0, t.size))
+            self._z_size_buf = deque(maxlen=2000)
+            print(f"[WorldAgent] size reshape ON: targets from {size_reshape}")
+        self.reshape_counts = {"depth_applied": 0, "depth_warmup": 0, "size_applied": 0, "size_warmup": 0}
         # log class priors [limit, cancel, market] for the 'prior' decode. Taken from the
         # real test-set next-event marginals (limit=0.49, cancel=0.48, market=0.03).
         self._type_log_prior = torch.log(torch.tensor([0.49, 0.48, 0.03], device=cst.DEVICE))
@@ -148,6 +179,10 @@ class WorldAgent(Agent):
         print("DIAG depth_pre_drop: neg={} 0={} 1-2={} 3-5={} 6+={}".format(
             self.depth_hist["neg"], self.depth_hist["0"], self.depth_hist["1-2"],
             self.depth_hist["3-5"], self.depth_hist["6+"]))
+        if self.depth_reshape_target is not None or self.size_reshape_targets is not None or self.depth_noise > 0:
+            print("DIAG reshape: depth_applied={} depth_warmup={} size_applied={} size_warmup={} depth_noise={}".format(
+                self.reshape_counts["depth_applied"], self.reshape_counts["depth_warmup"],
+                self.reshape_counts["size_applied"], self.reshape_counts["size_warmup"], self.depth_noise))
         for k in ("limit", "cancel", "market"):
             h = self.size_hist[k]
             s = self.size_stats[k]
@@ -589,6 +624,19 @@ class WorldAgent(Agent):
         
         
 
+    @staticmethod
+    def _quantile_remap(z, buf, target_sorted, target_qgrid):
+        """Online quantile match: rank z within the model's own recent raw outputs (midrank over
+        ties), then read the same quantile off the sorted REAL target array. Midrank matters:
+        if the source has fully collapsed (all buffered z identical), q=0.5 and the output is the
+        target's median — a graceful no-op, not a jump to the distribution's extreme."""
+        arr = np.fromiter(buf, dtype=np.float64)
+        n = arr.size
+        less = np.count_nonzero(arr < z)
+        eq = np.count_nonzero(arr == z)
+        q = (less + 0.5 * (eq + 1.0)) / (n + 1.0)
+        return float(np.interp(q, target_qgrid, target_sorted))
+
     def _postprocess_generated_TRADES(self, generated):
         ''' we need to go from the output of the diffusion model to an actual order '''
         direction = generated[self.size_type_emb+3]
@@ -623,7 +671,8 @@ class WorldAgent(Agent):
         self.decoded_type_counts[order_type] += 1  # pre-drop histogram (model's raw intent)
 
         # we return the size and the time to the original scale
-        size = round(generated[self.size_type_emb+1].item() * self.normalization_terms["event"][1] + self.normalization_terms["event"][0], ndigits=0)
+        z_size_raw = generated[self.size_type_emb+1].item()
+        size = round(z_size_raw * self.normalization_terms["event"][1] + self.normalization_terms["event"][0], ndigits=0)
 
         # Pre-drop size histogram + running mean/std, split limit vs market. Real markets have
         # depth0~58.6% too (concentration at the touch isn't itself abnormal) — the sharper gap is
@@ -632,6 +681,18 @@ class WorldAgent(Agent):
         # collapses to a narrow/high band under deterministic sampling, compounding the wall
         # regardless of depth's sign.
         _sk = {1: "limit", 3: "cancel", 4: "market"}[order_type]
+        # SIZE quantile reshape: remap this z's rank (within the model's own recent raw z_size
+        # outputs) onto the REAL per-type size marginal. Also eliminates the ~30-40% negative-size
+        # decode population entirely (targets live in [0,1000]), so the size_range drop-and-resample
+        # waste (42% of batches under DDPM) disappears — a throughput win on top of realism.
+        if self.size_reshape_targets is not None:
+            self._z_size_buf.append(z_size_raw)
+            if len(self._z_size_buf) >= self._reshape_warmup:
+                _t, _q = self.size_reshape_targets[_sk]
+                size = max(1.0, round(self._quantile_remap(z_size_raw, self._z_size_buf, _t, _q)))
+                self.reshape_counts["size_applied"] += 1
+            else:
+                self.reshape_counts["size_warmup"] += 1
         if size < 0:        self.size_hist[_sk]["neg"] += 1
         elif size <= 50:     self.size_hist[_sk]["0-50"] += 1
         elif size <= 200:    self.size_hist[_sk]["51-200"] += 1
@@ -649,8 +710,25 @@ class WorldAgent(Agent):
         # widens (and slightly shifts) the depth distribution so some mass crosses into
         # negative (marketable) territory, restoring the tail without a stochastic sampler.
         # kappa=1.0 -> identical to original behavior.
-        z_depth = generated[-1].item() * self.depth_temp
+        z_depth_raw = generated[-1].item()
+        z_depth = z_depth_raw * self.depth_temp
+        # --depth-noise: per-sample N(0,sigma) on the depth channel only, at decode, LIMIT only.
+        # The "dumb variance fix" comparator to quantile reshape: unlike CHURN/HYBRID it cannot
+        # destabilize other channels (it never enters the sampler or the conditioning), and unlike
+        # --depth-temp it acts per-SAMPLE, so it can split the collapsed atom rather than slide it.
+        if self.depth_noise > 0.0 and order_type == 1:
+            z_depth = z_depth + self.depth_noise * float(np.random.randn())
         depth = round(z_depth * self.normalization_terms["event"][7] + self.normalization_terms["event"][6], ndigits=0)
+        # DEPTH quantile reshape (LIMIT only — market bypasses depth at placement; cancel depth is
+        # a matching key, not a distributional quantity). Overrides depth-temp/noise when active.
+        if self.depth_reshape_target is not None and order_type == 1:
+            self._z_depth_buf.append(z_depth_raw)
+            if len(self._z_depth_buf) >= self._reshape_warmup:
+                depth = round(self._quantile_remap(z_depth_raw, self._z_depth_buf,
+                                                   self.depth_reshape_target, self._depth_qgrid))
+                self.reshape_counts["depth_applied"] += 1
+            else:
+                self.reshape_counts["depth_warmup"] += 1
         time = generated[0].item() * self.normalization_terms["event"][5] + self.normalization_terms["event"][4]
 
         # Pre-drop depth histogram. The freeze is a depth-diversity problem: few-step

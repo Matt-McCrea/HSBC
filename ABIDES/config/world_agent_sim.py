@@ -153,6 +153,24 @@ parser.add_argument('--depth-temp', type=float, default=1.0,
                     help='Scale the decoded depth z-score by this factor (1.0 = off). kappa>1 widens the '
                          'depth distribution so some orders spill into negative (marketable) depth, '
                          'restoring the execution-driving tail that deterministic few-step sampling collapses.')
+parser.add_argument('--depth-reshape', nargs='?', const='data/quantile_targets/real_depth_limit.npy',
+                    default=None, metavar='NPY',
+                    help='Quantile-reshape decoded LIMIT depth: rank each raw z within the model\'s own '
+                         'recent outputs (rolling buffer, midrank ties), read the same quantile off the '
+                         'REAL signed-depth marginal (build with scripts/build_quantile_targets.py). '
+                         'Nonlinear per-sample map — restores the real crossing tail with real MAGNITUDES, '
+                         'which the unclamp retrain alone could not (DDIM10 B_crossing_limit stayed 0). '
+                         'Optional value = target .npy path.')
+parser.add_argument('--size-reshape', nargs='?', const='data/quantile_targets',
+                    default=None, metavar='DIR',
+                    help='Quantile-reshape decoded size onto the REAL per-type size marginals '
+                         '(real_size_{limit,cancel,market}.npy in DIR). Also eliminates the ~30-40%% '
+                         'negative-size decode waste (42%% of batches resampled under DDPM).')
+parser.add_argument('--depth-noise', type=float, default=0.0,
+                    help='Per-sample N(0,sigma) added to z_depth at decode (LIMIT only; 0 = off). The '
+                         '"dumb variance fix" comparator to --depth-reshape: acts per-sample (can split '
+                         'the collapsed atom, unlike --depth-temp) and never enters the sampler or other '
+                         'channels (cannot destabilize, unlike CHURN). sigma~0.15 predicts ~0.5%% crossing.')
 
 args, remaining_args = parser.parse_known_args()
 
@@ -317,6 +335,9 @@ if args.diffusion:
                             fix_lob_pad=args.fix_lob_pad,
                             drop_type2_cond=args.drop_type2_cond,
                             depth_temp=args.depth_temp,
+                            depth_reshape=args.depth_reshape,
+                            size_reshape=args.size_reshape,
+                            depth_noise=args.depth_noise,
                           )
                ])
     elif config.CHOSEN_MODEL == cst.Models.CGAN:
@@ -438,6 +459,12 @@ if args.diffusion:
         _flag_suffix += "_gs{}".format(args.guidance_scale)
     if args.depth_temp != 1.0:
         _flag_suffix += "_dtemp{}".format(args.depth_temp)
+    if args.depth_reshape:
+        _flag_suffix += "_dr"
+    if args.size_reshape:
+        _flag_suffix += "_sr"
+    if args.depth_noise > 0.0:
+        _flag_suffix += "_dn{}".format(args.depth_noise)
 
 if trade_pov:
     if args.diffusion:
