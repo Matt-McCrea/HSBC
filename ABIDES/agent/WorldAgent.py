@@ -91,6 +91,11 @@ class WorldAgent(Agent):
         _sz_buckets = {"0-50": 0, "51-200": 0, "201-500": 0, "501-1000": 0, ">1000": 0, "neg": 0}
         self.size_hist = {"limit": dict(_sz_buckets), "cancel": dict(_sz_buckets), "market": dict(_sz_buckets)}
         self.size_stats = {"limit": [0.0, 0.0, 0], "cancel": [0.0, 0.0, 0], "market": [0.0, 0.0, 0]}  # [sum, sumsq, n]
+        # SEPARATE valid-range-only accumulator (0<=size<=1000, i.e. what survives the drop filter).
+        # The full-population size_stats mean/std above is contaminated by the ~30% negative-size
+        # decode population — not representative of what actually gets placed into the book. This
+        # is the number that's actually comparable across samplers for the wall-mechanism question.
+        self.size_stats_valid = {"limit": [0.0, 0.0, 0], "cancel": [0.0, 0.0, 0], "market": [0.0, 0.0, 0]}
         # Channel A vs Channel B: type==4 ("market") always executes via placeMarketOrder,
         # bypassing depth entirely. type==1 ("limit") only executes if its price genuinely
         # crosses the CURRENT opposite-side best price, via the exchange's real matching engine
@@ -148,10 +153,13 @@ class WorldAgent(Agent):
             s = self.size_stats[k]
             mean = s[0] / s[2] if s[2] else float("nan")
             std = ((s[1] / s[2]) - mean ** 2) ** 0.5 if s[2] else float("nan")
+            v = self.size_stats_valid[k]
+            vmean = v[0] / v[2] if v[2] else float("nan")
+            vstd = ((v[1] / v[2]) - vmean ** 2) ** 0.5 if v[2] else float("nan")
             print("DIAG size_pre_drop[{}]: neg={} 0-50={} 51-200={} 201-500={} 501-1000={} >1000={}  "
-                  "mean={:.1f} std={:.1f} n={}".format(
+                  "mean={:.1f} std={:.1f} n={}  |  valid-range-only: mean={:.1f} std={:.1f} n={}".format(
                       k, h["neg"], h["0-50"], h["51-200"], h["201-500"], h["501-1000"], h[">1000"],
-                      mean, std, s[2]))
+                      mean, std, s[2], vmean, vstd, v[2]))
         for feat, s in sorted(self.cond_stats.items()):
             mean = s[2] / s[3] if s[3] else float("nan")
             print("DIAG cond_z[{}]: min={:.2f} mean={:.2f} max={:.2f} n={}".format(feat, s[0], mean, s[1], s[3]))
@@ -631,6 +639,9 @@ class WorldAgent(Agent):
         elif size <= 1000:   self.size_hist[_sk]["501-1000"] += 1
         else:                self.size_hist[_sk][">1000"] += 1
         self.size_stats[_sk][0] += size; self.size_stats[_sk][1] += size * size; self.size_stats[_sk][2] += 1
+        if 0 <= size <= 1000:
+            v = self.size_stats_valid[_sk]
+            v[0] += size; v[1] += size * size; v[2] += 1
         # depth_temp: scale the decoded depth z-score before denormalizing. Training clamped
         # depth to >=0, so the model piles its depth output near 0 (passive); only sampling
         # variance spilling below 0 produces marketable orders that execute and move price.
