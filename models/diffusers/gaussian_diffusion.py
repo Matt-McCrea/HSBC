@@ -588,9 +588,12 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
         t_aug, t_step = 0.0, 0.0
         for i in range(self.num_diffusionsteps-1, -1, -1):
             _t0 = time.perf_counter()
-            x_t_aug, cond_orders, cond_lob = self.augment(x_t, orig_cond_orders, orig_cond_lob)
+            with torch.profiler.record_function("ddpm_augment"):
+                x_t_aug, cond_orders, cond_lob = self.augment(x_t, orig_cond_orders, orig_cond_lob)
             _t1 = time.perf_counter()
-            x_t = self.ddpm_single_step(x_0, x_t_aug, x_t_orig, t, cond_orders, noise, weights, cond_lob)
+            with torch.profiler.record_function("ddpm_single_step"):
+                x_t = self.ddpm_single_step(x_0, x_t_aug, x_t_orig, t, cond_orders, noise, weights, cond_lob,
+                                            compute_loss=False)
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
             _t2 = time.perf_counter()
@@ -605,9 +608,18 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
         x_t, noise = super().forward_reparametrized(x_0, t)
         return x_t, noise
 
-    def ddpm_single_step(self, x_0, x_t_aug, x_t, t, cond_orders, noise_true, weights, cond_lob, batch_idx=None):
+    def ddpm_single_step(self, x_0, x_t_aug, x_t, t, cond_orders, noise_true, weights, cond_lob,
+                         batch_idx=None, compute_loss=True):
         '''
-        Compute the reverse diffusion process for the current time step
+        Compute the reverse diffusion process for the current time step.
+
+        compute_loss=True (default, used by training's direct call in diffusion_engine.py) computes
+        L_mse/L_vlb for self.loss() to consume after the batch. During GENERATION (ddpm_sample's
+        100-step loop) this is dead work: nothing ever calls self.loss() on the result, x_0 is all
+        zeros (there is no "true" clean sample to generate from), and noise_true is not a meaningful
+        target — every one of the 100 steps was computing a KL-divergence + Gaussian log-likelihood
+        loss (_vlb_loss: two extra elementwise passes, _normal_kl, _gaussian_log_likelihood with a
+        tanh-based CDF approximation) purely to discard it. ddpm_sample passes compute_loss=False.
         '''
         # Get the beta and alpha values for the current time step
         beta_t = self.betas[t]
@@ -617,7 +629,8 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
         alpha_t = repeat(alpha_t, 'b -> b l d', l=self.gen_seq_size, d=x_0.shape[-1])
         alpha_cumprod_t = repeat(alpha_cumprod_t, 'b -> b l d', l=self.gen_seq_size, d=x_0.shape[-1])
         # Get the noise and v outputs from the neural network for the current time step
-        noise_t, v = self._forward_with_guidance(x_t_aug, cond_orders, t, cond_lob)
+        with torch.profiler.record_function("ddpm_NN_forward"):
+            noise_t, v = self._forward_with_guidance(x_t_aug, cond_orders, t, cond_lob)
         #noise_t = self.NN(x_t_aug, cond_orders, t, cond_lob)
         #check for nan in x_t_aug and cond and noise_t
         #if torch.isnan(v).any():
@@ -647,30 +660,32 @@ class GaussianDiffusion(nn.Module, DiffusionAB):
 
         # Compute x_{t-1} from x_t through the reverse diffusion process for the current time step
         x_recon = 1 / torch.sqrt(alpha_t) * (x_t - (beta_t / torch.sqrt(1 - alpha_cumprod_t) * noise_t)) + (std_t * z)
-        # Compute the mean squared error loss between the noise and the true noise
-        L_mse = self._mse_loss(noise_t, noise_true)
-        # Append the loss to the mse_losses list
-        self.mse_losses.append(L_mse)
-        # Compute the variational lower bound loss for the current time step
-        
-        L_vlb = self._vlb_loss(
-            noise_t=noise_t.detach(),
-            pred_log_var=log_var_t,
-            x_0=x_0,
-            x_t=x_t,
-            t=t,
-            beta_t=beta_t,
-            alpha_t=alpha_t,
-            alpha_cumprod_t=alpha_cumprod_t,
-            clip_denoised=False,
-            weights=weights
-        ).clamp(max=100)
-        #check if there are nan in L_vlb
-        if torch.isnan(L_vlb).any():
-            print("L_vlb:", L_vlb.max())
-        # Append the loss to the vbl_losses list
-        self.vlb_losses.append(L_vlb)
-        
+
+        if compute_loss:
+            with torch.profiler.record_function("ddpm_loss_computation"):
+                # Compute the mean squared error loss between the noise and the true noise
+                L_mse = self._mse_loss(noise_t, noise_true)
+                # Append the loss to the mse_losses list
+                self.mse_losses.append(L_mse)
+                # Compute the variational lower bound loss for the current time step
+                L_vlb = self._vlb_loss(
+                    noise_t=noise_t.detach(),
+                    pred_log_var=log_var_t,
+                    x_0=x_0,
+                    x_t=x_t,
+                    t=t,
+                    beta_t=beta_t,
+                    alpha_t=alpha_t,
+                    alpha_cumprod_t=alpha_cumprod_t,
+                    clip_denoised=False,
+                    weights=weights
+                ).clamp(max=100)
+                #check if there are nan in L_vlb
+                if torch.isnan(L_vlb).any():
+                    print("L_vlb:", L_vlb.max())
+                # Append the loss to the vbl_losses list
+                self.vlb_losses.append(L_vlb)
+
         return x_recon
 
     def augment(self, x_t: torch.Tensor, cond_orders: torch.Tensor, cond_lob: torch.Tensor):
