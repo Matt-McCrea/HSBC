@@ -47,22 +47,30 @@ COLUMNS_NAMES = {
 
 
 def find_days(day_dir):
-    """Discover trading dates from *_message_10.csv filenames in day_dir."""
-    dates = []
-    for f in sorted(glob.glob(os.path.join(day_dir, "*_message_10.csv"))):
-        m = re.match(r"(\d{4}-\d{2}-\d{2})_", os.path.basename(f))
-        if m:
-            dates.append(m.group(1))
-    return dates
+    """Discover (date, message_path) pairs from *message*10.csv files in day_dir.
+
+    Handles BOTH LOBSTER naming conventions seen in the wild (and on the remote):
+      2015-01-30_34140000_57660000_message_10.csv          (bare date first)
+      INTC_2015-01-30_34140000_57660000_message_10.csv     (ticker-prefixed)
+    The original re.match(r'^date_') silently found ZERO files against the prefixed
+    convention, which crashed every reshape cell of the 2026-07-14 overnight run.
+    De-dupes by date (same day present under both namings counts once)."""
+    by_date = {}
+    for f in sorted(glob.glob(os.path.join(day_dir, "*message*10.csv"))):
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", os.path.basename(f))
+        if m and m.group(1) not in by_date:
+            by_date[m.group(1)] = f
+    return sorted(by_date.items())
 
 
-def load_day(day_dir, date):
-    msg_path = glob.glob(os.path.join(day_dir, f"{date}_*_message_10.csv"))
-    ob_path = glob.glob(os.path.join(day_dir, f"{date}_*_orderbook_10.csv"))
-    if not msg_path or not ob_path:
+def load_day(msg_path):
+    """Load a (message, orderbook) pair given the message path; the orderbook path is derived
+    by substring replacement so the pairing can never mismatch across naming conventions."""
+    ob_path = msg_path.replace("message", "orderbook")
+    if not os.path.isfile(ob_path):
         return None, None
-    messages = pd.read_csv(msg_path[0], names=COLUMNS_NAMES["message"], usecols=range(6))
-    orderbook = pd.read_csv(ob_path[0], names=COLUMNS_NAMES["orderbook"])
+    messages = pd.read_csv(msg_path, names=COLUMNS_NAMES["message"], usecols=range(6))
+    orderbook = pd.read_csv(ob_path, names=COLUMNS_NAMES["orderbook"])
     return messages, orderbook
 
 
@@ -74,19 +82,19 @@ def main():
     args = ap.parse_args()
 
     print(f"cst.UNCLAMP_DEPTH = {cst.UNCLAMP_DEPTH}  (should be True — targets must reflect signed depth)")
-    dates = find_days(args.day_dir)
-    if not dates:
-        print(f"no *_message_10.csv files found in {args.day_dir}")
-        return
-    print(f"found {len(dates)} trading days: {dates[0]} .. {dates[-1]}")
+    days = find_days(args.day_dir)
+    if not days:
+        print(f"ERROR: no *message*10.csv files found in {args.day_dir}")
+        sys.exit(1)   # nonzero so shell callers actually abort (silent exit-0 broke the 07-14 night)
+    print(f"found {len(days)} trading days: {days[0][0]} .. {days[-1][0]}")
 
     depth_limit = []
     size_by_type = {1: [], 3: [], 4: []}
 
-    for date in dates:
-        messages, orderbook = load_day(args.day_dir, date)
+    for date, msg_path in days:
+        messages, orderbook = load_day(msg_path)
         if messages is None:
-            print(f"  skip {date} (files not found)")
+            print(f"  skip {date} (orderbook pair not found for {msg_path})")
             continue
         _, msg = preprocess_data([messages.copy(), orderbook.copy()], cst.N_LOB_LEVELS, cst.Models.TRADES)
         et = msg["event_type"].to_numpy()
@@ -97,6 +105,9 @@ def main():
             size_by_type[t].append(size[et == t])
         print(f"  {date}: n={len(msg)}  limit_depth_neg={(depth[et==1]<0).sum()}")
 
+    if not depth_limit:
+        print("ERROR: every trading day was skipped — no target data extracted")
+        sys.exit(1)
     os.makedirs(args.out_dir, exist_ok=True)
 
     depth_limit = np.sort(np.concatenate(depth_limit).astype(np.float32))

@@ -73,8 +73,14 @@ echo "UNCLAMP_DEPTH_FLAG set (ckpt $ID is unclamp-trained; conditioning must mat
 # training — includes the pre-event-snapshot indexing fix, so signed depths are genuine.
 if [[ ! -f data/quantile_targets/real_depth_limit.npy ]]; then
   echo "── building real-data quantile targets ──"
-  python scripts/build_quantile_targets.py 2>&1 | tee "$OUT_DIR/logs/build_targets.txt" \
-    || { echo "target build FAILED — reshape cells cannot run"; exit 1; }
+  python scripts/build_quantile_targets.py 2>&1 | tee "$OUT_DIR/logs/build_targets.txt"
+fi
+# Hard-verify the artifact itself, independent of the builder's exit path — on 07-14 the builder
+# found zero files, exited 0, the shell sailed on, and every -dr/-sr cell crashed at np.load.
+if [[ ! -f data/quantile_targets/real_depth_limit.npy ]]; then
+  echo "!! data/quantile_targets/real_depth_limit.npy still missing after build — every"
+  echo "   --depth-reshape/--size-reshape cell would crash. See $OUT_DIR/logs/build_targets.txt."
+  echo "   Refusing to burn the night."; exit 1
 fi
 
 # Real market-replay CSVs for flow_mix (missing file crashed every flow_mix last night).
@@ -124,22 +130,34 @@ run "DDIM10_dr_sr"       DDIM 10 "--depth-reshape --size-reshape"
 # This cell = the full fast-sampler candidate: both channels repaired at 10-step cost.
 run "DDIM10_dr_sr_prior" DDIM 10 "--depth-reshape --size-reshape --type-decode prior"
 
-echo "════ STAGE 2: the dumb-variance comparator — is smart reshaping even needed? ════"
+echo "════ STAGE 2: depth-noise dose-response — the FIRST dial-not-cliff lever ════"
+# 07-14 result (the two cells that survived that night): B_crossing_limit came off zero on DDIM
+# for the FIRST TIME EVER, and monotonically — dn0.15: B=19 mids=30; dn0.3: B=248 mids=37; both
+# with sane cond_z. mids still undershoot real (69), so extend the curve to 0.5.
 run "DDIM10_dn0.15"      DDIM 10 "--depth-noise 0.15"
 run "DDIM10_dn0.3"       DDIM 10 "--depth-noise 0.3"
+run "DDIM10_dn0.5"       DDIM 10 "--depth-noise 0.5"
+# the dn-based full candidate, mirroring dr_sr_prior — if dr disappoints, THIS is the contender
+run "DDIM10_dn0.3_sr_prior" DDIM 10 "--depth-noise 0.3 --size-reshape --type-decode prior"
 
 echo "════ STAGE 3: generality — other backbone, size-axis isolation ════"
 run "DPMpp10_dr_sr"      DPM_SOLVER_PP 10 "--depth-reshape --size-reshape"
 run "DDIM10_sr"          DDIM 10 "--size-reshape"                     # size axis alone
 
-# ════ STAGE 4: adaptive gate — spend the night's tail based on the headline result ════
-# Success-only cells (seeds, extended horizon) are wasted if the headline froze; diagnostic
-# cells (ladder, isolation, combo, DDPM control) carry information either way and run regardless.
-HEADLINE_B=$(grep -o 'B_crossing_limit=[0-9]*' "$OUT_DIR/logs/DDIM10_dr_sr_prior.txt" 2>/dev/null | head -1 | cut -d= -f2)
-[[ -z "${HEADLINE_B:-}" ]] && HEADLINE_B=$(grep -o 'B_crossing_limit=[0-9]*' "$OUT_DIR/logs/DDIM10_dr.txt" 2>/dev/null | head -1 | cut -d= -f2)
-HEADLINE_B="${HEADLINE_B:-0}"
-echo "════ GATE: headline B_crossing_limit=$HEADLINE_B → success-only stages $([[ "$HEADLINE_B" -gt 0 ]] && echo ENABLED || echo SKIPPED) ════"
-echo "**GATE: headline B_crossing_limit=$HEADLINE_B**" >> "$SUM"; echo "" >> "$SUM"
+# ════ STAGE 4: adaptive gate — spend the night's tail on whichever lever actually works ════
+# Success-only cells (seeds, extended horizon) are wasted if everything froze; diagnostic cells
+# (ladder, isolation, combo, DDPM control) carry information either way and run regardless.
+# Two candidate levers are compared by their B_crossing_limit; stages 8-9 use the winner's config.
+getB () { grep -o 'B_crossing_limit=[0-9]*' "$OUT_DIR/logs/$1.txt" 2>/dev/null | head -1 | cut -d= -f2; }
+B_DR=$(getB DDIM10_dr_sr_prior); [[ -z "${B_DR:-}" ]] && B_DR=$(getB DDIM10_dr); B_DR="${B_DR:-0}"
+B_DN=$(getB DDIM10_dn0.3_sr_prior); [[ -z "${B_DN:-}" ]] && B_DN=$(getB DDIM10_dn0.3); B_DN="${B_DN:-0}"
+if [[ "$B_DR" -ge "$B_DN" ]]; then
+  HEADLINE_B="$B_DR"; WIN_EXTRA="--depth-reshape --size-reshape --type-decode prior"; WIN_TAG="dr_sr_prior"
+else
+  HEADLINE_B="$B_DN"; WIN_EXTRA="--depth-noise 0.3 --size-reshape --type-decode prior"; WIN_TAG="dn0.3_sr_prior"
+fi
+echo "════ GATE: B(dr)=$B_DR  B(dn)=$B_DN  → winner=$WIN_TAG, success-only stages $([[ "$HEADLINE_B" -gt 0 ]] && echo ENABLED || echo SKIPPED) ════"
+echo "**GATE: B(dr)=$B_DR B(dn)=$B_DN → winner=$WIN_TAG**" >> "$SUM"; echo "" >> "$SUM"
 
 echo "════ STAGE 5: NFE ladder — does decode-time repair hold as acceleration deepens? ════"
 run "DDIM5_dr_sr_prior"   DDIM 5  "--depth-reshape --size-reshape --type-decode prior"
@@ -162,15 +180,15 @@ run "DDIM10_dn0.15_sr"   DDIM 10 "--depth-noise 0.15 --size-reshape"
 run "DDPM100_dr_sr"      DDPM 100 "--depth-reshape --size-reshape"
 
 if [[ "$HEADLINE_B" -gt 0 ]]; then
-  echo "════ STAGE 8: seed robustness — rule out a lucky draw on the headline claim ════"
-  run "DDIM10_dr_sr_prior_s31" DDIM 10 "--depth-reshape --size-reshape --type-decode prior" "" 31
-  run "DDIM10_dr_sr_prior_s32" DDIM 10 "--depth-reshape --size-reshape --type-decode prior" "" 32
+  echo "════ STAGE 8: seed robustness on the WINNING lever ($WIN_TAG) ════"
+  run "DDIM10_${WIN_TAG}_s31" DDIM 10 "$WIN_EXTRA" "" 31
+  run "DDIM10_${WIN_TAG}_s32" DDIM 10 "$WIN_EXTRA" "" 32
 
   echo "════ STAGE 9: extended horizon — does the unfrozen market SURVIVE 75 min of generation? ════"
-  run "DDIM10_dr_sr_prior_ET1100" DDIM 10 "--depth-reshape --size-reshape --type-decode prior" "$ET_LONG"
+  run "DDIM10_${WIN_TAG}_ET1100" DDIM 10 "$WIN_EXTRA" "$ET_LONG"
 else
-  echo "════ STAGES 8-9 SKIPPED (gate: headline B=0) ════"
-  { echo "## Stages 8-9 — SKIPPED (gate: headline B_crossing_limit=0)"; echo ""; } >> "$SUM"
+  echo "════ STAGES 8-9 SKIPPED (gate: no lever produced B>0) ════"
+  { echo "## Stages 8-9 — SKIPPED (gate: B_crossing_limit=0 on both dr and dn levers)"; echo ""; } >> "$SUM"
 fi
 
 # ════ MORNING TABLE + LOB-BENCH MANIFEST ══════════════════════════════════════════════════════
