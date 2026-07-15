@@ -1,8 +1,9 @@
 # Data ? never commit (large, machine-specific)
 data/
 
-# scripts/unclamp_retrain.sh's file-based flag (transient local state, not code)
+# file-based feature flags (transient local state, not code)
 UNCLAMP_DEPTH_FLAG
+PRICE_REANCHOR_FLAG
 
 # Python
 __pycache__/

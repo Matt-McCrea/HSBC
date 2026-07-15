@@ -54,6 +54,9 @@ if __name__ == "__main__":
     print(f"[main.py] cst.UNCLAMP_DEPTH = {cst.UNCLAMP_DEPTH}  "
           f"(env UNCLAMP_DEPTH={os.environ.get('UNCLAMP_DEPTH')!r}, "
           f"flag file present={os.path.exists('UNCLAMP_DEPTH_FLAG')})", flush=True)
+    print(f"[main.py] cst.PRICE_REANCHOR = {cst.PRICE_REANCHOR}  "
+          f"(env PRICE_REANCHOR={os.environ.get('PRICE_REANCHOR')!r}, "
+          f"flag file present={os.path.exists('PRICE_REANCHOR_FLAG')})", flush=True)
 
     config = configuration.Configuration()
     if (cst.DEVICE == "cpu"):

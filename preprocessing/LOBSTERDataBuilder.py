@@ -27,6 +27,9 @@ class LOBSTERDataBuilder:
         print(f"[LOBSTERDataBuilder] cst.UNCLAMP_DEPTH = {cst.UNCLAMP_DEPTH}  "
               f"(depth clamp {'OFF — signed depth' if cst.UNCLAMP_DEPTH else 'ON — clamped at 0'})",
               flush=True)
+        print(f"[LOBSTERDataBuilder] cst.PRICE_REANCHOR = {cst.PRICE_REANCHOR}  "
+              f"(prices {'anchored to each day open mid' if cst.PRICE_REANCHOR else 'absolute (original)'})",
+              flush=True)
         path = "{}/{}/{}_{}_{}".format(
             self.data_dir,
             self.stock_name,

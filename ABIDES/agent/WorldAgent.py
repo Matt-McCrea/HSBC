@@ -124,6 +124,15 @@ class WorldAgent(Agent):
         self.dn_target_exec = dn_target_exec      # 0 = off (fixed σ, original behavior)
         self._exec_outcomes = deque(maxlen=1000)  # 1 = placed order will execute, 0 = passive
         self._dn_sigma_eff = depth_noise          # last effective σ (for DIAG)
+        # PRICE_REANCHOR: same day-open-mid anchor convention as training preprocessing (shared
+        # helper — cannot diverge). Applied to conditioning prices only, never to stored
+        # snapshots or placed orders. Removes the z≈−4σ price-OOD cliff where the model
+        # degenerates (see constants.py). A model trained with the flag REQUIRES it at sim time.
+        self.price_anchor = 0.0
+        if cst.PRICE_REANCHOR:
+            from utils.utils_data import compute_price_anchor
+            self.price_anchor = float(compute_price_anchor(self.historical_lob))
+            print(f"[WorldAgent] PRICE_REANCHOR on: day anchor = {self.price_anchor} (raw units)")
         # log class priors [limit, cancel, market] for the 'prior' decode. Taken from the
         # real test-set next-event marginals (limit=0.49, cancel=0.48, market=0.03).
         self._type_log_prior = torch.log(torch.tensor([0.49, 0.48, 0.03], device=cst.DEVICE))
@@ -930,6 +939,12 @@ class WorldAgent(Agent):
             ask_prices[ask_prices == 0] = 9999999999
             bid_prices = orderbook[:, 2::4]
             bid_prices[bid_prices == 0] = -9999999999
+        if cst.PRICE_REANCHOR and self.price_anchor:
+            # anchor only real quotes: zero-padded missing levels keep their existing (already
+            # OOD-extreme) convention, matching how training skips sentinel prices.
+            prices = orderbook[:, 0::2]
+            _real_quote = (np.abs(prices) > 0) & (np.abs(prices) < 9_000_000_000)
+            prices[_real_quote] -= self.price_anchor
         orderbook[:, 0::2] = orderbook[:, 0::2] / 100
         orderbook[:, 0::2] = (orderbook[:, 0::2] - self.normalization_terms["lob"][2]) / self.normalization_terms["lob"][3]
         orderbook[:, 1::2] = (orderbook[:, 1::2] - self.normalization_terms["lob"][0]) / self.normalization_terms["lob"][1]
@@ -982,6 +997,11 @@ class WorldAgent(Agent):
 
         # drop the order_id column
         orders_dataframe = orders_dataframe.drop(columns=["order_id"])
+
+        # PRICE_REANCHOR: applied after the depth loop above (depth is difference-based) —
+        # mirrors preprocess_data's insertion point exactly.
+        if cst.PRICE_REANCHOR and self.price_anchor:
+            orders_dataframe["price"] = orders_dataframe["price"] - self.price_anchor
 
         # divide all the price, both of lob and messages, by 100
         orders_dataframe["price"] = orders_dataframe["price"] / 100

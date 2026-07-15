@@ -264,6 +264,22 @@ def reset_indexes(dataframes):
     return dataframes
 
 
+_LOB_SENTINEL = 9_000_000_000  # |price| above this = LOBSTER missing-level sentinel
+
+
+def compute_price_anchor(orderbook):
+    """Day anchor for PRICE_REANCHOR: the first row's valid best-bid/ask mid, in RAW price units.
+    Shared by training preprocessing AND WorldAgent so the convention cannot diverge.
+    Accepts a DataFrame or ndarray with the standard 40-col layout (ask1 price at col 0,
+    bid1 price at col 2)."""
+    arr = np.asarray(orderbook, dtype=float)
+    for j in range(len(arr)):
+        a1, b1 = arr[j, 0], arr[j, 2]
+        if 0 < a1 < _LOB_SENTINEL and 0 < b1 < _LOB_SENTINEL:
+            return round((a1 + b1) / 2.0)
+    raise ValueError("compute_price_anchor: no row with a valid two-sided book")
+
+
 def preprocess_data(dataframes, n_lob_levels, chosen_model):
     print("n_lob_levels =", n_lob_levels, "-> LOB cols =", n_lob_levels * cst.LEN_LEVEL)
     print("orderbook width in:", dataframes[1].shape[1])
@@ -338,6 +354,24 @@ def preprocess_data(dataframes, n_lob_levels, chosen_model):
     dataframes[1] = dataframes[1].iloc[1:, :]
 
     dataframes = reset_indexes(dataframes)
+
+    # PRICE_REANCHOR: subtract the day's opening mid from every price (messages + LOB), in raw
+    # units, AFTER depth computation (depth is difference-based, so provably unaffected) and
+    # BEFORE the /100 + z-scoring downstream — both the builder and the slow stats path inherit
+    # anchored prices automatically, so normalization stats become intraday-deviation stats
+    # (mean_price ~0 instead of ~3620). Sentinel prices (|.|>9e9, missing levels) are skipped so
+    # they stay bit-identical to the unanchored convention. TRADES-focused: the flag should stay
+    # off for CGAN (its returns_1/returns_50 use pct_change, whose denominator anchoring shifts).
+    if cst.PRICE_REANCHOR:
+        anchor = compute_price_anchor(dataframes[1])
+        dataframes[0]["price"] = dataframes[0]["price"] - anchor
+        lob_price_cols = dataframes[1].columns[0::2]
+        for col in lob_price_cols:
+            v = dataframes[1][col].astype("float64")
+            mask = v.abs() < _LOB_SENTINEL
+            dataframes[1][col] = v.where(~mask, v - anchor)
+        print(f"[preprocess_data] PRICE_REANCHOR on: day anchor = {anchor} (raw units)")
+
     if chosen_model == cst.Models.CGAN:
         # Initialize new columns
         dataframes[0]["cancel_depth"] = 0

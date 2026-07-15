@@ -16,6 +16,17 @@ import torch
 # conditioning matches what the model was trained on.
 UNCLAMP_DEPTH = (os.environ.get("UNCLAMP_DEPTH", "0") == "1") or os.path.exists("UNCLAMP_DEPTH_FLAG")
 
+# Anchor all prices to each day's opening mid before normalization (training preprocessing AND
+# simulation conditioning — must match, same discipline as UNCLAMP_DEPTH). WHY: TRADES z-scores
+# ABSOLUTE prices with a global training mean (mean_price≈36.21, σ≈0.67), so the whole Jan-30
+# test day sits at −3.4..−3.9σ, and the moment the (genuinely real) intraday decline pushes the
+# mid through z≈−4.0 ($33.50) the model itself degenerates: the time channel explodes (event
+# rate collapses ~35x), spreads gap, generation dies — observed at the SAME price threshold in
+# both the fixed-σ and σ-controlled 75-min runs, with a healthy book. Anchoring to the session
+# open makes the price channel a bounded intraday deviation (±~1%), removing the OOD boundary.
+# File flag, not just env (env vars silently failed twice on this remote).
+PRICE_REANCHOR = (os.environ.get("PRICE_REANCHOR", "0") == "1") or os.path.exists("PRICE_REANCHOR_FLAG")
+
 
 class LearningHyperParameter(str, Enum):
     NUM_DIFFUSIONSTEPS = "num_diffusionsteps"
