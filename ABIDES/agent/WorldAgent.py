@@ -32,7 +32,8 @@ class WorldAgent(Agent):
     def __init__(self, id, name, type, symbol, date, date_trading_days, model, data_dir, log_orders=True, random_state=None, normalization_terms=None,
                  using_diffusion=False, chosen_model=None, seq_len=256, cond_seq_size=255, cond_type='full', size_type_emb=3, gen_seq_size=1,
                  fix_time=False, type_decode='l1', fix_cancel_bind=False, fix_lob_pad=False, drop_type2_cond=False,
-                 depth_temp=1.0, depth_reshape=None, size_reshape=None, depth_noise=0.0):
+                 depth_temp=1.0, depth_reshape=None, size_reshape=None, depth_noise=0.0,
+                 dn_target_exec=0.0):
 
         super().__init__(id, name, type, random_state=random_state, log_to_file=log_orders)
         self.count_neg_size = 0
@@ -109,6 +110,20 @@ class WorldAgent(Agent):
             self._z_size_buf = deque(maxlen=2000)
             print(f"[WorldAgent] size reshape ON: targets from {size_reshape}")
         self.reshape_counts = {"depth_applied": 0, "depth_warmup": 0, "size_applied": 0, "size_warmup": 0}
+        # ── Execution-rate feedback controller for depth-noise σ ──
+        # WHY: fixed σ=0.3 is realistic over 30 min but over 75 min the drift profile shows a
+        # liquidity DEATH SPIRAL: exec% runs 8-15% vs real's 4-6% from the moment generation takes
+        # over (while producing ~1.75x fewer events/min than real), the net drain empties the book
+        # at ~min 45 — events/bucket collapse 8k→219, spread explodes 1→41 ticks, mid teleports
+        # -5%. Cause precedes effect: over-execution, not direction (the sell-pressure direction
+        # matched real's). Fix: proportional control of σ to hold the realized exec share at a
+        # target. σ_eff = σ_base · clip(target/realized, 0.25, 4.0), realized measured over the
+        # last 1000 placed orders (exec = Channel A market orders + Channel B crossing limits,
+        # known at placement time). Self-recovering by construction: a post-collapse exec spike
+        # (25-38% observed) slams σ down → pure passive replenishment → the book refills.
+        self.dn_target_exec = dn_target_exec      # 0 = off (fixed σ, original behavior)
+        self._exec_outcomes = deque(maxlen=1000)  # 1 = placed order will execute, 0 = passive
+        self._dn_sigma_eff = depth_noise          # last effective σ (for DIAG)
         # log class priors [limit, cancel, market] for the 'prior' decode. Taken from the
         # real test-set next-event marginals (limit=0.49, cancel=0.48, market=0.03).
         self._type_log_prior = torch.log(torch.tensor([0.49, 0.48, 0.03], device=cst.DEVICE))
@@ -183,6 +198,10 @@ class WorldAgent(Agent):
             print("DIAG reshape: depth_applied={} depth_warmup={} size_applied={} size_warmup={} depth_noise={}".format(
                 self.reshape_counts["depth_applied"], self.reshape_counts["depth_warmup"],
                 self.reshape_counts["size_applied"], self.reshape_counts["size_warmup"], self.depth_noise))
+        if self.dn_target_exec > 0.0:
+            realized = (sum(self._exec_outcomes) / len(self._exec_outcomes)) if self._exec_outcomes else float("nan")
+            print("DIAG dn_controller: target_exec={} realized_exec_last{}={:.3f} sigma_base={} sigma_eff_final={:.3f}".format(
+                self.dn_target_exec, self._exec_outcomes.maxlen, realized, self.depth_noise, self._dn_sigma_eff))
         for k in ("limit", "cancel", "market"):
             h = self.size_hist[k]
             s = self.size_stats[k]
@@ -717,7 +736,14 @@ class WorldAgent(Agent):
         # destabilize other channels (it never enters the sampler or the conditioning), and unlike
         # --depth-temp it acts per-SAMPLE, so it can split the collapsed atom rather than slide it.
         if self.depth_noise > 0.0 and order_type == 1:
-            z_depth = z_depth + self.depth_noise * float(np.random.randn())
+            sigma = self.depth_noise
+            if self.dn_target_exec > 0.0 and len(self._exec_outcomes) >= 300:
+                # proportional controller: throttle σ when the market over-executes, open it
+                # back up when it under-executes. Bounds keep it a modulation, not a takeover.
+                realized = sum(self._exec_outcomes) / len(self._exec_outcomes)
+                sigma = self.depth_noise * min(4.0, max(0.25, self.dn_target_exec / max(realized, 1e-3)))
+            self._dn_sigma_eff = sigma
+            z_depth = z_depth + sigma * float(np.random.randn())
         depth = round(z_depth * self.normalization_terms["event"][7] + self.normalization_terms["event"][6], ndigits=0)
         # DEPTH quantile reshape (LIMIT only — market bypasses depth at placement; cancel depth is
         # a matching key, not a distributional quantity). Overrides depth-temp/noise when active.
@@ -746,6 +772,8 @@ class WorldAgent(Agent):
             self.count_neg_size += 1
             self.drop_counts["size_range"] += 1
             return None
+
+        _will_exec = False   # controller signal: does this placed order consume liquidity NOW?
         
         # if the time is negative we approximate to 1 microsecond
         if time <= 0:
@@ -774,6 +802,7 @@ class WorldAgent(Agent):
                 current_ask = self.lob_snapshots[-1][0::4][0]
                 if current_ask > 0 and price >= current_ask:
                     self.channel_b_would_cross += 1
+                    _will_exec = True
             else:
                 ask_side = self.lob_snapshots[-1][0::4]
                 ask_price = ask_side[0]
@@ -792,6 +821,7 @@ class WorldAgent(Agent):
                 current_bid = self.lob_snapshots[-1][2::4][0]
                 if current_bid > 0 and price <= current_bid:
                     self.channel_b_would_cross += 1
+                    _will_exec = True
 
         elif order_type == 3:
             if direction == 1:
@@ -863,6 +893,7 @@ class WorldAgent(Agent):
 
         elif order_type == 4:
             self.diff_market_order_placed += 1
+            _will_exec = True   # Channel A: market orders always execute immediately
             if direction == 1:
                 price = self.lob_snapshots[-1][0]
             else:
@@ -871,6 +902,7 @@ class WorldAgent(Agent):
             # the diffusion gives in output market order and not execution of limit order,
             # so we transform market orders in execution orders of the opposite side as the original message files
             direction = -direction
+        self._exec_outcomes.append(1 if _will_exec else 0)   # feed the σ controller
         self.count_diff_placed_orders += 1
         return np.array([time, order_type, order_id, size, price, direction])
 

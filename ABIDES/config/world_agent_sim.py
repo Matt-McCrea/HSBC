@@ -171,6 +171,13 @@ parser.add_argument('--depth-noise', type=float, default=0.0,
                          '"dumb variance fix" comparator to --depth-reshape: acts per-sample (can split '
                          'the collapsed atom, unlike --depth-temp) and never enters the sampler or other '
                          'channels (cannot destabilize, unlike CHURN). sigma~0.15 predicts ~0.5%% crossing.')
+parser.add_argument('--dn-target-exec', type=float, default=0.0,
+                    help='Execution-rate feedback controller for --depth-noise (0 = off, fixed sigma). '
+                         'Holds the realized exec share (Channel A + B, last 1000 placed orders) at this '
+                         'target by scaling sigma in [0.25x, 4x]. Fixes the 75-min liquidity death '
+                         'spiral: fixed sigma over-executes 2-3x real, drains the book dry by ~min 45 '
+                         '(events 8k->219/bucket, spread 1->41 ticks, mid teleports -5%%). Real exec '
+                         'share ~0.07 (09:45-10:00) / ~0.045 (09:45-11:00).')
 
 args, remaining_args = parser.parse_known_args()
 
@@ -338,6 +345,7 @@ if args.diffusion:
                             depth_reshape=args.depth_reshape,
                             size_reshape=args.size_reshape,
                             depth_noise=args.depth_noise,
+                            dn_target_exec=args.dn_target_exec,
                           )
                ])
     elif config.CHOSEN_MODEL == cst.Models.CGAN:
@@ -465,6 +473,8 @@ if args.diffusion:
         _flag_suffix += "_sr"
     if args.depth_noise > 0.0:
         _flag_suffix += "_dn{}".format(args.depth_noise)
+    if args.dn_target_exec > 0.0:
+        _flag_suffix += "_te{}".format(args.dn_target_exec)
 
 if trade_pov:
     if args.diffusion:
