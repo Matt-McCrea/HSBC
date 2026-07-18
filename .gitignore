@@ -48,6 +48,15 @@ analysis/*.pdf
 analysis/*.aux
 analysis/*.log
 analysis/*.out
+analysis/*.fls
+analysis/*.fdb_latexmk
+analysis/*.synctex.gz
 
 # cloned external tools (e.g. lob_bench)
 external/
+
+# Local-only working docs (kept on disk, never committed/pushed)
+analysis/dissertation_source_map.md
+analysis/call_prep_qa.md
+analysis/hsbc_update_brief.tex
+analysis/methodology_draft.tex
