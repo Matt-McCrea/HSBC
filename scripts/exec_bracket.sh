@@ -15,10 +15,12 @@
 set -uo pipefail
 TICKER="INTC"; DATE="20150130"; ST="09:30:00"; ET="10:00:00"
 CKPT_DIR="data/checkpoints/TRADES"; ID=""
+SIGMAS="0.10 0.125 0.15"                         # override with --sigmas "0.16 0.17 0.18"
 REAL="ABIDES/log/market_replay_${TICKER}_2015-01-30_10-00-00_30/processed_orders.csv"
 OUT_DIR="exec_bracket/$(date +%Y%m%d_%H%M%S)"
 while [[ $# -gt 0 ]]; do case "$1" in
   --id) ID="$2"; shift 2;; --out-dir) OUT_DIR="$2"; shift 2;;
+  --sigmas) SIGMAS="$2"; shift 2;;
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
 mkdir -p "$OUT_DIR/logs"; SUM="$OUT_DIR/summary.md"
 
@@ -65,10 +67,10 @@ run () { # run <tag> <extra>
   echo "  done ${SECS}s"
 }
 
-# Bracket below sigma=0.2. 0.15 is the extrapolated sweet spot; 0.10/0.125 pin the curve.
-run "DDIM10_dn0.10_sr_prior" "--depth-noise 0.10 --size-reshape --type-decode prior"
-run "DDIM10_dn0.125_sr_prior" "--depth-noise 0.125 --size-reshape --type-decode prior"
-run "DDIM10_dn0.15_sr_prior" "--depth-noise 0.15 --size-reshape --type-decode prior"
+# One cell per sigma in $SIGMAS (default brackets below 0.2; pass --sigmas to re-target).
+for s in $SIGMAS; do
+  run "DDIM10_dn${s}_sr_prior" "--depth-noise ${s} --size-reshape --type-decode prior"
+done
 
 # mini table
 python3 - "$SUM" <<'PY'
