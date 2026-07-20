@@ -1,5 +1,5 @@
 """
-Stylized-facts battery: Real vs the two best reanchored-checkpoint configs (dn0.3, dn0.4).
+Stylized-facts battery: Real vs generated reanchored-checkpoint configs.
 
 Real is derived from the local LOBSTER message+orderbook (row-aligned; prices in 1/10000 $).
 Everything is sliced to the pure-generation window 09:45-10:00 and, for return-based panels,
@@ -29,11 +29,16 @@ LOB_DIR = "data/INTC/INTC_2015-01-02_2015-01-30_10"
 REAL_OB = f"{LOB_DIR}/INTC_2015-01-30_34140000_57660000_orderbook_10.csv"
 REAL_MSG = f"{LOB_DIR}/INTC_2015-01-30_34140000_57660000_message_10.csv"
 
-# fixed categorical order, colourblind-safe (validated: CVD dE 21.9); Real = neutral dark
-SERIES = [
-    ("Real",   "#222222", None),
-    ("dn0.3",  "#0072B2", f"{CSV_DIR}/world_agent_INTC_2015-01-30_10-00-00_30_DDIM_0.0_10_val_ema=0.627_tdprior_sr_dn0.3.csv"),
-    ("dn0.4",  "#D55E00", f"{CSV_DIR}/world_agent_INTC_2015-01-30_10-00-00_30_DDIM_0.0_10_val_ema=0.627_tdprior_sr_dn0.4.csv"),
+# Fallback runs used only when --series is not passed (the shells always pass --series explicitly).
+# Named by the run-name SUFFIX ("end"), so they resolve whether the runs live as
+# ABIDES/log/<run>/processed_orders.csv (on the GPU box) or as exported reanchored_csvs/<run>.csv
+# (locally). Any suffix with no matching run is skipped with a warning, so the default never crashes.
+DEFAULT_RUNS = [
+    ("baseline (no noise)", "tdprior_sr"),
+    ("dn0.3",               "tdprior_sr_dn0.3"),
+    ("dn0.5",               "tdprior_sr_dn0.5"),
+    ("dn0.6",               "tdprior_sr_dn0.6"),
+    ("dn0.3 te0.045",       "tdprior_sr_dn0.3_te0.045"),
 ]
 
 
@@ -42,8 +47,37 @@ def _slice(df):
     return df[(df["dt"] >= lo) & (df["dt"] < hi)].copy()
 
 
+def _resolve_gen_path(path):
+    """Accept any of the layouts a run can produce: a processed_orders.csv, a run DIRECTORY (->
+    <dir>/processed_orders.csv), or a flat exported CSV. Returns the resolved file, or None."""
+    if os.path.isdir(path):
+        cand = os.path.join(path, "processed_orders.csv")
+        return cand if os.path.isfile(cand) else None
+    if os.path.isfile(path):
+        return path
+    cand = os.path.join(path, "processed_orders.csv")   # path given without its processed_orders leaf
+    return cand if os.path.isfile(cand) else None
+
+
+def _resolve_run_suffix(suffix):
+    """Find a run whose name ENDS with `suffix`, as an ABIDES/log run dir (-> its processed_orders.csv)
+    or an exported reanchored_csvs/<run>.csv. Returns the CSV path, or None."""
+    for d in sorted(glob.glob(f"ABIDES/log/*{suffix}")):
+        if os.path.basename(d.rstrip("/")).endswith(suffix):
+            cand = os.path.join(d, "processed_orders.csv")
+            if os.path.isfile(cand):
+                return cand
+    for f in sorted(glob.glob(os.path.join(CSV_DIR, f"*{suffix}.csv"))):
+        if os.path.basename(f).endswith(suffix + ".csv"):
+            return f
+    return None
+
+
 def load_gen(path):
-    df = pd.read_csv(path)
+    resolved = _resolve_gen_path(path)
+    if resolved is None:
+        raise FileNotFoundError(f"no CSV at {path} (nor {path}/processed_orders.csv)")
+    df = pd.read_csv(resolved)
     df["dt"] = pd.to_datetime(df.iloc[:, 0], errors="coerce")
     for c in ("ask_price_1", "bid_price_1", "SIZE"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -81,11 +115,21 @@ def acf(x, max_lag=MAX_LAG):
 
 
 def _resolve_real(lob_dir, date):
-    """Find the LOBSTER orderbook + message CSVs for a date, whatever the time-range suffix."""
-    ob = sorted(glob.glob(os.path.join(lob_dir, f"*{date}*orderbook*.csv")))
-    msg = sorted(glob.glob(os.path.join(lob_dir, f"*{date}*message*.csv")))
+    """Find the LOBSTER orderbook + message CSVs for a date. Tries the given directory first, then
+    falls back to a recursive search under it, its parent, and data/ — so the exact folder name
+    (whether it ends in _10 or not) does not matter."""
+    def _find(base, recursive):
+        pat_ob = os.path.join(base, "**", f"*{date}*orderbook*.csv") if recursive else os.path.join(base, f"*{date}*orderbook*.csv")
+        pat_ms = os.path.join(base, "**", f"*{date}*message*.csv") if recursive else os.path.join(base, f"*{date}*message*.csv")
+        return sorted(glob.glob(pat_ob, recursive=recursive)), sorted(glob.glob(pat_ms, recursive=recursive))
+    ob, msg = _find(lob_dir, False)
     if not ob or not msg:
-        raise FileNotFoundError(f"no LOBSTER orderbook/message CSV for {date} in {lob_dir}")
+        for base in (lob_dir, os.path.dirname(lob_dir.rstrip("/")) or ".", "data"):
+            ob, msg = _find(base, True)
+            if ob and msg:
+                break
+    if not ob or not msg:
+        raise FileNotFoundError(f"no LOBSTER orderbook/message CSV for {date} under {lob_dir} (or data/)")
     return ob[0], msg[0]
 
 
@@ -93,8 +137,10 @@ def main():
     global DATE, LOB_DIR, REAL_OB, REAL_MSG, WIN_LO, WIN_HI
     ap = argparse.ArgumentParser(description="Stylized-facts battery: Real vs generated configs.")
     ap.add_argument("--series", action="append", default=[], metavar="LABEL=CSV",
-                    help="Generated config as LABEL=path/to/processed_orders.csv (repeatable). "
-                         "If omitted, uses the built-in dn0.3/dn0.4 defaults.")
+                    help="Generated config as LABEL=path (repeatable). The path may be a "
+                         "processed_orders.csv, a run directory (its processed_orders.csv is used), or a "
+                         "flat CSV. Missing paths are skipped with a warning. If omitted, resolves the "
+                         "built-in DEFAULT_RUNS by run-name suffix.")
     ap.add_argument("--date", default=DATE, help="Trading day YYYY-MM-DD (default 2015-01-30).")
     ap.add_argument("--lob-dir", default=LOB_DIR, help="Directory holding the LOBSTER ob/msg CSVs.")
     ap.add_argument("--win-lo", default=WIN_LO, help="Window start HH:MM:SS (default 09:45:00).")
@@ -110,14 +156,26 @@ def main():
     # Okabe-Ito categorical order (colourblind-safe), Real always first as neutral dark.
     palette = ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9"]
     if args.series:
-        series = [("Real", "#222222", None)]
+        raw = []
         for i, spec in enumerate(args.series):
             if "=" not in spec:
                 raise SystemExit(f"--series expects LABEL=CSV, got: {spec}")
             label, path = spec.split("=", 1)
-            series.append((label.strip(), palette[i % len(palette)], path.strip()))
+            raw.append((label.strip(), palette[i % len(palette)], path.strip()))
     else:
-        series = SERIES
+        raw = [(label, palette[i % len(palette)], _resolve_run_suffix(suffix) or suffix)
+               for i, (label, suffix) in enumerate(DEFAULT_RUNS)]
+
+    # Resolve each generated path; skip (with a warning) any that is absent so a partial sweep plots.
+    series = [("Real", "#222222", None)]
+    for label, color, path in raw:
+        if _resolve_gen_path(path) is None:
+            print(f"  WARN: skipping '{label}' — no CSV at {path} (nor {path}/processed_orders.csv)")
+            continue
+        series.append((label, color, path))
+    if len(series) < 2:
+        raise SystemExit("no generated series resolved — pass --series LABEL=path (a processed_orders.csv, "
+                         "a run directory, or a flat CSV)")
 
     data = {}
     for name, color, path in series:

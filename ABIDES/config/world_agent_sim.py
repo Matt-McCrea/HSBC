@@ -178,6 +178,36 @@ parser.add_argument('--dn-target-exec', type=float, default=0.0,
                          'spiral: fixed sigma over-executes 2-3x real, drains the book dry by ~min 45 '
                          '(events 8k->219/bucket, spread 1->41 ticks, mid teleports -5%%). Real exec '
                          'share ~0.07 (09:45-10:00) / ~0.045 (09:45-11:00).')
+# --- DIRECTION A levers (impact + volatility). Both default 0 = OFF = winning config unchanged. ---
+parser.add_argument('--cancel-boost', type=float, default=0.0,
+                    help='Bias the type decode toward CANCEL (subtract this from the cancel anchor '
+                         'score). More cancels drain resting liquidity -> thinner book -> larger price '
+                         'impact per marketable order. Targets the under-cancel/thick-book gap that '
+                         'LOB-Bench does not penalise but that makes impact too cheap. 0 = off.')
+parser.add_argument('--depth-drift', type=float, default=0.0,
+                    help='AR(1) directional-persistence amplitude on the depth channel (LIMIT only). '
+                         'Creates short runs of same-side aggression -> transient mid excursions that '
+                         'mean-revert (E[drift]=0, so NO net trend), raising realized volatility and '
+                         'reducing the over-mean-reversion. 0 = off. Try 0.1-0.3.')
+parser.add_argument('--depth-drift-phi', type=float, default=0.995,
+                    help='AR(1) persistence for --depth-drift (0..1). Higher = longer directional runs. '
+                         'Default 0.995.')
+# --- LONG-HORIZON STABILITY levers. Both default 0 = OFF = winning config unchanged. ---
+parser.add_argument('--book-target-thick', type=float, default=0.0,
+                    help='Book-balancing spontaneous cancellation (0 = off). When a side top-of-book size '
+                         'exceeds this multiple of the real mean level size (normalization_terms["lob"][0]), '
+                         'cancel our own resting orders at the touch to thin it. Recreates the cancel churn '
+                         'real markets have -> targets BOTH the under-cancel gap and the 90-min lopsided-book '
+                         'divergence (they are the same problem). Try 1.5-3.0. Needs --book-cancel-rate.')
+parser.add_argument('--book-cancel-rate', type=float, default=0.5,
+                    help='Fraction of the per-side excess touch size removed each generation step by '
+                         '--book-target-thick (0..1). Only active when --book-target-thick > 0. Default 0.5.')
+parser.add_argument('--cond-clip', type=float, default=0.0,
+                    help='Clip the z-scored order-book SIZE conditioning to [-C, C] before it enters the '
+                         'model (0 = off). Keeps the fed-back book state inside training support over long '
+                         'horizons, arresting the closed-loop drift that grows the touch sizes OOD. Applies '
+                         'to sizes only (prices are handled by PRICE_REANCHOR; missing-level sentinels '
+                         'untouched). Try 4-6.')
 
 args, remaining_args = parser.parse_known_args()
 
@@ -346,6 +376,12 @@ if args.diffusion:
                             size_reshape=args.size_reshape,
                             depth_noise=args.depth_noise,
                             dn_target_exec=args.dn_target_exec,
+                            cancel_boost=args.cancel_boost,
+                            depth_drift=args.depth_drift,
+                            depth_drift_phi=args.depth_drift_phi,
+                            book_target_thick=args.book_target_thick,
+                            book_cancel_rate=args.book_cancel_rate,
+                            cond_clip=args.cond_clip,
                           )
                ])
     elif config.CHOSEN_MODEL == cst.Models.CGAN:
@@ -475,6 +511,14 @@ if args.diffusion:
         _flag_suffix += "_dn{}".format(args.depth_noise)
     if args.dn_target_exec > 0.0:
         _flag_suffix += "_te{}".format(args.dn_target_exec)
+    if args.cancel_boost != 0.0:
+        _flag_suffix += "_cb{}".format(args.cancel_boost)
+    if args.depth_drift > 0.0:
+        _flag_suffix += "_dd{}".format(args.depth_drift)
+    if args.book_target_thick > 0.0:
+        _flag_suffix += "_bt{}r{}".format(args.book_target_thick, args.book_cancel_rate)
+    if args.cond_clip > 0.0:
+        _flag_suffix += "_cc{}".format(args.cond_clip)
 
 if trade_pov:
     if args.diffusion:

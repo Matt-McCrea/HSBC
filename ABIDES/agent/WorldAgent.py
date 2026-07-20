@@ -33,7 +33,8 @@ class WorldAgent(Agent):
                  using_diffusion=False, chosen_model=None, seq_len=256, cond_seq_size=255, cond_type='full', size_type_emb=3, gen_seq_size=1,
                  fix_time=False, type_decode='l1', fix_cancel_bind=False, fix_lob_pad=False, drop_type2_cond=False,
                  depth_temp=1.0, depth_reshape=None, size_reshape=None, depth_noise=0.0,
-                 dn_target_exec=0.0):
+                 dn_target_exec=0.0, cancel_boost=0.0, depth_drift=0.0, depth_drift_phi=0.995,
+                 book_target_thick=0.0, book_cancel_rate=0.5, cond_clip=0.0):
 
         super().__init__(id, name, type, random_state=random_state, log_to_file=log_orders)
         self.count_neg_size = 0
@@ -124,6 +125,24 @@ class WorldAgent(Agent):
         self.dn_target_exec = dn_target_exec      # 0 = off (fixed σ, original behavior)
         self._exec_outcomes = deque(maxlen=1000)  # 1 = placed order will execute, 0 = passive
         self._dn_sigma_eff = depth_noise          # last effective σ (for DIAG)
+        # DIRECTION A levers (both default OFF -> winning config byte-for-byte unchanged):
+        self.cancel_boost = cancel_boost          # bias type decode toward CANCEL: thins the book,
+                                                  # raises price impact per marketable order.
+        self.depth_drift = depth_drift            # AR(1) directional bias amplitude on the depth channel:
+        self.depth_drift_phi = depth_drift_phi    # persistence. Creates short runs of same-side aggression
+        self._drift = 0.0                          # -> transient mid excursions that mean-revert (no net trend).
+        # ── LONG-HORIZON STABILITY levers (both default OFF -> winning config byte-for-byte unchanged) ──
+        # WHY: over 90 min the closed loop exhibits exposure bias (the "autoregressive trap"): the model
+        # is teacher-forced on real book states in training but conditions on its own drifting outputs at
+        # sim time, so per-step errors compound and the touch depth accumulates into lopsided walls (ask1
+        # ~16k vs bid1 ~6k) while the mid freezes. The exec controller holds the trade rate but not the
+        # depth. These two levers attack it decode-side, no retrain.
+        self.book_target_thick = book_target_thick  # cancel own resting touch when a side > this x real mean
+        self.book_cancel_rate = book_cancel_rate    #   level size; fraction of the excess removed per step.
+        self.cond_clip = cond_clip                  # clip z-scored book SIZE conditioning to [-C, C]
+        self.book_cancels_issued = 0                # DIAG: count of book-balancing cancels sent
+        self.book_cancel_qty = 0                    # DIAG: total quantity cancelled by book-balancing
+        self.cond_clipped_count = 0                 # DIAG: z-scored size entries clipped by --cond-clip
         # PRICE_REANCHOR: same day-open-mid anchor convention as training preprocessing (shared
         # helper — cannot diverge). Applied to conditioning prices only, never to stored
         # snapshots or placed orders. Removes the z≈−4σ price-OOD cliff where the model
@@ -211,6 +230,14 @@ class WorldAgent(Agent):
             realized = (sum(self._exec_outcomes) / len(self._exec_outcomes)) if self._exec_outcomes else float("nan")
             print("DIAG dn_controller: target_exec={} realized_exec_last{}={:.3f} sigma_base={} sigma_eff_final={:.3f}".format(
                 self.dn_target_exec, self._exec_outcomes.maxlen, realized, self.depth_noise, self._dn_sigma_eff))
+        if self.cancel_boost != 0.0 or self.depth_drift > 0.0:
+            print("DIAG impact_levers: cancel_boost={} depth_drift={} depth_drift_phi={}".format(
+                self.cancel_boost, self.depth_drift, self.depth_drift_phi))
+        if self.book_target_thick > 0.0 or self.cond_clip > 0.0:
+            print("DIAG stability_levers: book_target_thick={} book_cancel_rate={} book_cancels_issued={} "
+                  "book_cancel_qty={} | cond_clip={} cond_clipped_count={}".format(
+                      self.book_target_thick, self.book_cancel_rate, self.book_cancels_issued,
+                      self.book_cancel_qty, self.cond_clip, self.cond_clipped_count))
         for k in ("limit", "cancel", "market"):
             h = self.size_hist[k]
             s = self.size_stats[k]
@@ -420,6 +447,9 @@ class WorldAgent(Agent):
             log_print("Agent ignored order of quantity zero: {}", order)
 
     def _generate_order(self, currentTime, max_attempts=100):
+        # --book-target-thick: thin an over-thick touch before generating the next batch, so the
+        # generation conditions on a book kept near real thickness (once per batch, not per order).
+        self._balance_book()
         generated = None
         post_processed_orders = []
         attempts = 0
@@ -684,6 +714,11 @@ class WorldAgent(Agent):
             # drift. Adding -log(prior) penalizes rare classes by exactly the right amount.
             d2 = torch.sum(_type_diffs ** 2, dim=1)
             score = 0.5 * d2 - self._type_log_prior
+            # --cancel-boost: lower the CANCEL anchor's score (index 1 -> order_type 3) so it is
+            # decoded more often. More cancels drain resting liquidity -> thinner book -> larger
+            # price impact per marketable order. Default 0 = no change.
+            if self.cancel_boost != 0.0 and score.numel() > 1:
+                score[1] = score[1] - self.cancel_boost
             order_type = torch.argmin(score).item() + 1
         elif self.type_decode == 'l2':
             # H2 variant: squared-euclidean nearest anchor instead of L1
@@ -753,6 +788,15 @@ class WorldAgent(Agent):
                 sigma = self.depth_noise * min(4.0, max(0.25, self.dn_target_exec / max(realized, 1e-3)))
             self._dn_sigma_eff = sigma
             z_depth = z_depth + sigma * float(np.random.randn())
+        # --depth-drift: AR(1) directional bias. Ticks every order (event time); biases LIMIT depth
+        # by the current drift * side, so drift>0 makes BUYS more marketable / SELLS less (net upward
+        # pressure) and vice-versa. E[drift]=0 -> excursions revert, so realized volatility rises
+        # WITHOUT a net trend. Reduces the over-mean-reversion (too-negative return lag-1 autocorr).
+        if self.depth_drift > 0.0:
+            self._drift = self.depth_drift_phi * self._drift \
+                + ((1.0 - self.depth_drift_phi ** 2) ** 0.5) * float(np.random.randn())
+            if order_type == 1:
+                z_depth = z_depth - direction * self.depth_drift * self._drift
         depth = round(z_depth * self.normalization_terms["event"][7] + self.normalization_terms["event"][6], ndigits=0)
         # DEPTH quantile reshape (LIMIT only — market bypasses depth at placement; cancel depth is
         # a matching key, not a distributional quantity). Overrides depth-temp/noise when active.
@@ -927,6 +971,44 @@ class WorldAgent(Agent):
             for order in level:
                 self.active_limit_orders[order.order_id] = order
 
+    def _balance_book(self):
+        """--book-target-thick: recreate real cancel churn. When a side's top-of-book size exceeds
+        book_target_thick x the real mean level size, cancel our own resting orders at the touch to
+        remove book_cancel_rate x the excess. Uses the existing cancelOrder path, so these show up as
+        genuine ORDER_CANCELLED events (raising the cancel share) and feed back into conditioning. This
+        targets both the under-cancel gap and the long-horizon depth divergence, which are one problem
+        (a book fed limits faster than cancels clear must accumulate depth)."""
+        if self.book_target_thick <= 0.0:
+            return
+        try:
+            ob = self.kernel.agents[0].order_books[self.symbol]
+            asks, bids = ob.asks, ob.bids
+        except Exception:
+            return
+        target = self.book_target_thick * self.normalization_terms["lob"][0]  # real mean level size
+        if target <= 0:
+            return
+        for side_levels, is_buy in ((asks, False), (bids, True)):
+            if not side_levels:
+                continue
+            touch = side_levels[0]                       # list of orders at the best level
+            touch_sz = sum(o.quantity for o in touch)
+            excess = touch_sz - target
+            if excess <= 0:
+                continue
+            to_remove = self.book_cancel_rate * excess
+            removed = 0
+            for o in list(touch):                        # cancel oldest-first at the touch
+                if removed >= to_remove:
+                    break
+                if getattr(o, "agent_id", self.id) != self.id:
+                    continue                             # only cancel our own resting orders
+                self.cancelOrder(o)
+                self.active_limit_orders.pop(o.order_id, None)
+                removed += o.quantity
+                self.book_cancels_issued += 1
+                self.book_cancel_qty += o.quantity
+
 
     def _z_score_orderbook(self, orderbook):
         if self.fix_lob_pad:
@@ -948,6 +1030,13 @@ class WorldAgent(Agent):
         orderbook[:, 0::2] = orderbook[:, 0::2] / 100
         orderbook[:, 0::2] = (orderbook[:, 0::2] - self.normalization_terms["lob"][2]) / self.normalization_terms["lob"][3]
         orderbook[:, 1::2] = (orderbook[:, 1::2] - self.normalization_terms["lob"][0]) / self.normalization_terms["lob"][1]
+        if self.cond_clip > 0.0:
+            # --cond-clip: keep the fed-back book SIZE conditioning inside training support, capping the
+            # runaway touch sizes that drive the long-horizon divergence. Sizes only: prices are handled
+            # by PRICE_REANCHOR, and missing-level size padding (z ~ -mean/std) is well inside [-C, C].
+            sizes = orderbook[:, 1::2]
+            self.cond_clipped_count += int(np.count_nonzero(np.abs(sizes) > self.cond_clip))
+            np.clip(sizes, -self.cond_clip, self.cond_clip, out=sizes)
         return orderbook
 
 
