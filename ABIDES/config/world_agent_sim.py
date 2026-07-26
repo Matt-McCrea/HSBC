@@ -208,6 +208,15 @@ parser.add_argument('--cond-clip', type=float, default=0.0,
                          'horizons, arresting the closed-loop drift that grows the touch sizes OOD. Applies '
                          'to sizes only (prices are handled by PRICE_REANCHOR; missing-level sentinels '
                          'untouched). Try 4-6.')
+parser.add_argument('--flow-balance', type=float, default=0.0,
+                    help='Adaptive directional bias that counters one-sided limit-order FLOW — the '
+                         'CROSS-DAY drift driver (limOFI one-sided while exec/B-S stay balanced; drift '
+                         'persists at every --depth-noise, so it is directional not a variance problem). '
+                         'The flow-side twin of the book-balancing cancel: tracks a rolling limit-side '
+                         'imbalance and nudges the decoded direction of LIMIT orders toward the thin side '
+                         '(limit-only; biasing a cancel/market side would thin support). Try 0.5-2.0. 0 = off.')
+parser.add_argument('--flow-balance-window', type=int, default=500,
+                    help='Rolling window (number of recent limit orders) for the --flow-balance imbalance.')
 
 args, remaining_args = parser.parse_known_args()
 
@@ -382,6 +391,8 @@ if args.diffusion:
                             book_target_thick=args.book_target_thick,
                             book_cancel_rate=args.book_cancel_rate,
                             cond_clip=args.cond_clip,
+                            flow_balance=args.flow_balance,
+                            flow_balance_window=args.flow_balance_window,
                           )
                ])
     elif config.CHOSEN_MODEL == cst.Models.CGAN:
@@ -519,6 +530,8 @@ if args.diffusion:
         _flag_suffix += "_bt{}r{}".format(args.book_target_thick, args.book_cancel_rate)
     if args.cond_clip > 0.0:
         _flag_suffix += "_cc{}".format(args.cond_clip)
+    if args.flow_balance > 0.0:
+        _flag_suffix += "_fb{}".format(args.flow_balance)
 
 if trade_pov:
     if args.diffusion:

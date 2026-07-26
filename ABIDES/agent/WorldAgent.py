@@ -34,7 +34,8 @@ class WorldAgent(Agent):
                  fix_time=False, type_decode='l1', fix_cancel_bind=False, fix_lob_pad=False, drop_type2_cond=False,
                  depth_temp=1.0, depth_reshape=None, size_reshape=None, depth_noise=0.0,
                  dn_target_exec=0.0, cancel_boost=0.0, depth_drift=0.0, depth_drift_phi=0.995,
-                 book_target_thick=0.0, book_cancel_rate=0.5, cond_clip=0.0):
+                 book_target_thick=0.0, book_cancel_rate=0.5, cond_clip=0.0,
+                 flow_balance=0.0, flow_balance_window=500):
 
         super().__init__(id, name, type, random_state=random_state, log_to_file=log_orders)
         self.count_neg_size = 0
@@ -144,6 +145,16 @@ class WorldAgent(Agent):
         self.book_target_thick = book_target_thick  # cancel own resting touch when a side > this x real mean
         self.book_cancel_rate = book_cancel_rate    #   level size; fraction of the excess removed per step.
         self.cond_clip = cond_clip                  # clip z-scored book SIZE conditioning to [-C, C]
+        # --flow-balance: adaptive directional bias that counters one-sided limit-order FLOW, the
+        # CROSS-DAY drift driver Stage 1 isolated (limOFI ~-7000 while B-S/exec stay balanced; drift
+        # persists at every sigma, so it is directional, not a variance problem). This is the flow-side
+        # twin of the book-balancing cancel: track a rolling limit-side imbalance and nudge the decoded
+        # direction of LIMIT orders toward the thin side, breaking the one-sided feedback. Limit-only —
+        # biasing a cancel/market direction would thin the supporting side. Default 0 = off.
+        self.flow_balance = flow_balance
+        self._flow_buf = deque(maxlen=flow_balance_window)   # rolling +1(buy)/-1(sell) of placed limits
+        self._flow_warmup = min(200, flow_balance_window)
+        self.flow_balance_applied = 0                        # DIAG: limit decodes whose direction was biased
         self.book_cancels_issued = 0                # DIAG: count of book-balancing cancels sent
         self.book_cancel_qty = 0                    # DIAG: total quantity cancelled by book-balancing
         self.cond_clipped_count = 0                 # DIAG: z-scored size entries clipped by --cond-clip
@@ -242,6 +253,10 @@ class WorldAgent(Agent):
                   "book_cancel_qty={} | cond_clip={} cond_clipped_count={}".format(
                       self.book_target_thick, self.book_cancel_rate, self.book_cancels_issued,
                       self.book_cancel_qty, self.cond_clip, self.cond_clipped_count))
+        if self.flow_balance > 0.0:
+            imb = (sum(self._flow_buf) / len(self._flow_buf)) if self._flow_buf else 0.0
+            print("DIAG flow_balance: strength={} window={} biased_limits={} final_limit_imbalance={:.3f}".format(
+                self.flow_balance, self._flow_buf.maxlen, self.flow_balance_applied, imb))
         for k in ("limit", "cancel", "market"):
             h = self.size_hist[k]
             s = self.size_stats[k]
@@ -701,12 +716,10 @@ class WorldAgent(Agent):
 
     def _postprocess_generated_TRADES(self, generated):
         ''' we need to go from the output of the diffusion model to an actual order '''
-        direction = generated[self.size_type_emb+3]
-        if direction < 0:
-            direction = -1
-        else:
-            direction = 1
-        
+        # keep the raw direction value; it is thresholded AFTER the type decode so --flow-balance can
+        # nudge it for LIMIT orders only (type decode does not depend on direction).
+        raw_dir = float(generated[self.size_type_emb+3])
+
         #order_type = torch.argmax(generated[1:self.size_type_emb+1]).item() + 1
         _type_diffs = self.model.type_embedder.weight.data - generated[1:self.size_type_emb+1]
         if self.type_decode == 'prior':
@@ -736,6 +749,16 @@ class WorldAgent(Agent):
         # order type == 3 -> cancel order
         # order type == 4 -> market order
         self.decoded_type_counts[order_type] += 1  # pre-drop histogram (model's raw intent)
+
+        # --flow-balance: for LIMIT orders, bias the direction toward the thin side when recent limit
+        # flow is one-sided (counters the drift), then threshold; track the placed side for the imbalance.
+        if self.flow_balance > 0.0 and order_type == 1 and len(self._flow_buf) >= self._flow_warmup:
+            imb = sum(self._flow_buf) / len(self._flow_buf)   # in [-1,1]; <0 = sell-dominated
+            raw_dir = raw_dir - self.flow_balance * imb
+            self.flow_balance_applied += 1
+        direction = -1 if raw_dir < 0 else 1
+        if self.flow_balance > 0.0 and order_type == 1:
+            self._flow_buf.append(direction)
 
         # we return the size and the time to the original scale
         z_size_raw = generated[self.size_type_emb+1].item()

@@ -1,34 +1,30 @@
 #!/bin/bash
-# drift_sigma_sweep.sh — Stage 1 of the 3-day plan: close the cross-day drift question.
+# flow_balance_sweep.sh — the directional (flow-side) probe for cross-day drift, the pre-retrain
+# cheap shot at generalisability. Stage 1 showed the drift is one-sided limit FLOW (limOFI ~-7000),
+# NOT variance/execution, so the symmetric levers (depth-noise, book-thinning) can't touch it. The
+# --flow-balance lever is the flow-side twin of the book-balancing cancel: it nudges the decoded
+# direction of LIMIT orders toward the thin side when recent flow is one-sided. This sweeps its
+# strength on the two clearest drift days, on the winning 30-min config.
 #
-# The adaptive controller (--dn-target-exec) was refuted on drift days. The untried lever is a
-# FIXED lower --depth-noise, with and without the book-balancing cancel. For each drift day we
-# sweep sigma and ask: is there ANY setting that is alive-and-stable (not frozen, not drifting), or
-# is the day's stable window empty? If empty on every day, the drift is decode-time-unfixable and
-# the scheduled-sampling retrain (Stage 3) is the necessary fix.
+# Success = a flow_balance value bounds the drift (uniq_mid toward real ~27-35, mid back in the real
+# envelope, ret1s_std near real) on BOTH days -> decode-time cross-day fix, retrain becomes optional.
 #
-# Each cell also runs drift_profile, whose per-bucket aggr_buy/aggr_sell/B-S closes the mechanism
-# question (Stage 1b): the prediction is balanced aggression (B-S ~ 0) even on drift days.
-#
-# Clones the proven run()/flow_mix harness from scripts/exec_bracket.sh, adds movemetric +
-# drift_profile + a per-day regime table. Decode-time only, no training.
-#
-# Usage:  bash scripts/drift_sigma_sweep.sh                          # 0107 & 0129, seed 30
-#         bash scripts/drift_sigma_sweep.sh --days "20150107" --sigmas "0.15 0.20" --seed 31
+# Usage:  bash scripts/flow_balance_sweep.sh                       # 0107 & 0129, fb in {0,0.5,1,2,3}
+#         bash scripts/flow_balance_sweep.sh --days 20150107 --flows "1.0 1.5"
 set -uo pipefail
 TICKER="INTC"; ST="09:30:00"; ET="10:00:00"
 CKPT_DIR="data/checkpoints/TRADES"; ID=""; SEED="30"
-DAYS="20150107 20150129"                          # the two clearest drift days
-SIGMAS="0.10 0.15 0.20 0.25 0.30"
-BOOK="--book-target-thick 2.0 --book-cancel-rate 0.5"   # the second setting per sigma; "" to skip
-OUT_DIR="drift_sweep/$(date +%Y%m%d_%H%M%S)"
+DAYS="20150107 20150129"
+FLOWS="0 0.5 1.0 2.0 3.0"                       # 0 = baseline (winning config, no flow-balance)
+BASE="--depth-noise 0.3 --size-reshape --type-decode prior"
+OUT_DIR="flow_sweep/$(date +%Y%m%d_%H%M%S)"
 while [[ $# -gt 0 ]]; do case "$1" in
   --id) ID="$2"; shift 2;; --out-dir) OUT_DIR="$2"; shift 2;; --seed) SEED="$2"; shift 2;;
-  --days) DAYS="$2"; shift 2;; --sigmas) SIGMAS="$2"; shift 2;; --book) BOOK="$2"; shift 2;;
+  --days) DAYS="$2"; shift 2;; --flows) FLOWS="$2"; shift 2;;
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
 mkdir -p "$OUT_DIR/logs"; SUM="$OUT_DIR/summary.md"
 
-if pgrep -f "main.py" > /dev/null; then echo "!! training (main.py) running — kill it first (GPU contention)."; exit 1; fi
+if pgrep -f "main.py" > /dev/null; then echo "!! training (main.py) running — kill it first."; exit 1; fi
 touch UNCLAMP_DEPTH_FLAG PRICE_REANCHOR_FLAG
 trap 'touch UNCLAMP_DEPTH_FLAG PRICE_REANCHOR_FLAG' EXIT
 PRECHECK=$(python3 -c "import constants as cst; print(cst.UNCLAMP_DEPTH, cst.PRICE_REANCHOR)" 2>&1)
@@ -41,15 +37,15 @@ if [[ -z "$ID" ]]; then
   [[ -n "$NEWEST" ]] || { echo "!! no .ckpt in $CKPT_DIR"; exit 1; }
   ID=$(valof "$NEWEST"); echo "auto-discovered: $(basename "$NEWEST") -> -id $ID"
 fi
-COLLIDE=$(for f in "$CKPT_DIR"/*.ckpt; do valof "$f"; done | grep -Fxc "$ID" || true)
-[[ "${COLLIDE:-0}" -le 1 ]] || { echo "!! $COLLIDE ckpts share val_ema=$ID — archive strays. Refusing."; exit 1; }
-echo "# Drift sigma sweep — $(date '+%F %T')  ckpt val_ema=$ID  seed=$SEED  days=[$DAYS]" > "$SUM"
+[[ -f data/quantile_targets/real_size_limit.npy ]] || python scripts/build_quantile_targets.py 2>&1 | tee "$OUT_DIR/logs/build_targets.txt"
+[[ -f data/quantile_targets/real_size_limit.npy ]] || { echo "!! quantile targets missing — refusing."; exit 1; }
+echo "# Flow-balance sweep — $(date '+%F %T')  ckpt val_ema=$ID  seed=$SEED  days=[$DAYS]  flows=[$FLOWS]" > "$SUM"
 
 ymd_dash () { echo "${1:0:4}-${1:4:2}-${1:6:2}"; }
 etdash () { echo "${1//:/-}"; }
-real_for () { echo "ABIDES/log/market_replay_${TICKER}_$(ymd_dash "$1")_$(etdash "$2")_30/processed_orders.csv"; }
+real_for () { echo "ABIDES/log/market_replay_${TICKER}_$(ymd_dash "$1")_$(etdash "$ET")_30/processed_orders.csv"; }
 ensure_real () {
-  local D="$1" RP; RP=$(real_for "$D" "$ET")
+  local D="$1" RP; RP=$(real_for "$D")
   [[ -f "$RP" ]] || { echo "  -- real replay $D" >&2; \
     python ABIDES/abides.py -c world_agent_sim -t "$TICKER" -date "$D" -st "$ST" -et "$ET" \
       > "$OUT_DIR/logs/real_${D}.txt" 2>&1; }
@@ -72,8 +68,7 @@ except Exception as e:
 PY
 }
 
-# run <tag> <date> <extra>
-run () {
+run () { # run <tag> <date> <extra>
   local TAG="$1" D="$2" EXTRA="$3"
   local LOG="$OUT_DIR/logs/${TAG}.txt"; local DONE="$OUT_DIR/logs/.done_${TAG}"
   [[ -f "$DONE" ]] && { echo "  SKIP $TAG"; return; }
@@ -81,32 +76,31 @@ run () {
   echo "-- $TAG"
   local S; S=$(mktemp); touch "$S"; local T0; T0=$(date +%s)
   local A=(python ABIDES/abides.py -c world_agent_sim -t "$TICKER" -date "$D" -st "$ST" -et "$ET"
-           -d True -m TRADES -type DDIM -nsteps 10 -eta 0.0 -id "$ID" -seed "$SEED"
-           --size-reshape --type-decode prior)
+           -d True -m TRADES -type DDIM -nsteps 10 -eta 0.0 -id "$ID" -seed "$SEED")
   # shellcheck disable=SC2206
-  A+=($EXTRA); echo "   ${A[*]}"
+  A+=($BASE $EXTRA); echo "   ${A[*]}"
   if ! "${A[@]}" > "$LOG" 2>&1; then echo "  ERROR — see $LOG"; echo "## $TAG — ERROR" >> "$SUM"; rm -f "$S"; return; fi
   local SECS=$(( $(date +%s) - T0 ))
   local CSV; CSV=$(find ABIDES/log -name processed_orders.csv -newer "$S" ! -path "*/paper/*" ! -path "*market_replay*" 2>/dev/null | sort | tail -1); rm -f "$S"
   { echo "## $TAG  (${SECS}s)  [$D seed=$SEED]"; echo '```'; echo "csv: ${CSV:-none}"; echo "real: $REALP"
     [[ -n "$CSV" ]] && { echo -n "gen  "; movemetric "$CSV"; }
     [[ -n "$CSV" && -f "$REALP" ]] && python -m evaluation.quantitative_eval.flow_mix --real "$REALP" --gen "$CSV" 2>&1
+    grep -E "DIAG flow_balance" "$LOG" | tail -1
     if [[ -n "$CSV" && -f "$REALP" ]]; then
-      echo ""; echo "-- drift_profile (B-S closes the mechanism question) --"
-      python evaluation/diagnostics/drift_profile.py "$CSV" --real "$REALP" 2>&1 | head -34
+      echo ""; echo "-- drift_profile --"; python evaluation/diagnostics/drift_profile.py "$CSV" --real "$REALP" 2>&1 | head -30
     fi
     echo '```'; echo ""; } >> "$SUM"
   touch "$DONE"; echo "  done ${SECS}s"
 }
 
 for D in $DAYS; do
-  for s in $SIGMAS; do
-    run "dd${D}_dn${s}"           "$D" "--depth-noise ${s}"
-    [[ -n "$BOOK" ]] && run "dd${D}_dn${s}_bt2.0r0.5" "$D" "--depth-noise ${s} $BOOK"
+  for f in $FLOWS; do
+    if [[ "$f" == "0" || "$f" == "0.0" ]]; then run "fb${D}_f0" "$D" ""
+    else run "fb${D}_f${f}" "$D" "--flow-balance ${f}"; fi
   done
 done
 
-# regime table: per cell classify freeze / alive / drift from uniq_mid + ret1s_std
+# regime table
 python3 - "$SUM" <<'PY'
 import re, sys
 text = open(sys.argv[1]).read(); rows = []
@@ -115,23 +109,23 @@ for block in re.split(r'^## ', text, flags=re.M)[1:]:
     if 'ERROR' in head: continue
     def g(pat, d='-'):
         m = re.search(pat, block); return m.group(1) if m else d
-    std = g(r'gen  move: ret1s_std=([\d.]+)bp'); uniq = g(r'uniq_mid=(\d+)')
-    rng = g(r'mid_range_tk=(\d+)'); exe = re.findall(r'ORDER_EXECUTED\s+([\d.]+)', block)
-    exe = exe[-1] if exe else '-'
+    std = g(r'gen  move: ret1s_std=([\d.]+)bp'); uniq = g(r'uniq_mid=(\d+)'); rng = g(r'mid_range_tk=(\d+)')
+    exe = re.findall(r'ORDER_EXECUTED\s+([\d.]+)', block); exe = exe[-1] if exe else '-'
+    imb = g(r'final_limit_imbalance=([-\d.]+)')
     reg = '-'
     try:
         u = int(uniq); sd = float(std)
         reg = 'FREEZE' if (u <= 9 and sd < 1.0) else ('DRIFT' if u >= 90 else 'alive?')
     except Exception:
         pass
-    rows.append((tag, uniq, std, exe, rng, reg))
-hdr = f"{'cell':<26}{'uniqMid':>8}{'std':>7}{'exec%':>7}{'rng_tk':>8}{'regime':>9}"
+    rows.append((tag, uniq, std, exe, rng, imb, reg))
+hdr = f"{'cell':<20}{'uniqMid':>8}{'std':>7}{'exec%':>7}{'rng_tk':>8}{'flowImb':>8}{'regime':>9}"
 tab = "\n".join([hdr, '-'*len(hdr)] +
-                [f"{t:<26}{u:>8}{s:>7}{e:>7}{r:>8}{g:>9}" for t,u,s,e,r,g in rows])
-print("\n==== DRIFT SIGMA SWEEP ====\n"
-      "  Per drift day: is any sigma 'alive?' (not FREEZE, not DRIFT)? If none, drift is\n"
-      "  decode-time-unfixable -> the retrain (Stage 3) is the necessary fix.\n" + tab)
+                [f"{t:<20}{u:>8}{s:>7}{e:>7}{r:>8}{i:>8}{g:>9}" for t,u,s,e,r,i,g in rows])
+print("\n==== FLOW-BALANCE SWEEP ====\n"
+      "  Real: 0107 ~27 mids, 0129 ~35 mids, ~13tk range. Does any flow_balance land 'alive?' on BOTH\n"
+      "  days (uniq_mid toward real, mid in envelope)? flowImb -> ~0 means the lever balanced the flow.\n" + tab)
 open(sys.argv[1], 'w').write("# TABLE\n```\n"+tab+"\n```\n\n"+text)
 PY
 echo ""; echo "Done. Summary: $SUM"
-echo "READ: per day, is there an 'alive?' sigma, or is the stable window empty?"
+echo "READ: does any flow_balance bound the drift on BOTH days? If yes -> decode-time cross-day fix."
