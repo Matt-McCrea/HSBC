@@ -14,7 +14,8 @@ class LOBDataset(data.Dataset):
             chosen_model,
             is_val=False,
             batch_size=None,
-            limit_val_batches=None
+            limit_val_batches=None,
+            scheduled_sampling=False
     ):
         self.paths = paths
         self.seq_size = seq_size          #sequence length
@@ -24,11 +25,18 @@ class LOBDataset(data.Dataset):
         self.is_val = is_val
         self.batch_size = batch_size
         self.limit_val_batches = limit_val_batches
+        # scheduled sampling (train only): also hand back the block AFTER x_0 and the book shifted by
+        # one generated block, so the training step can condition on a self-generated block and still
+        # score against a REAL next block. Needs one extra gen_seq_size block of stream per sample.
+        self.scheduled_sampling = scheduled_sampling
         self._get_data()
 
     def __len__(self):
         """ Denotes the total number of samples. """
-        return len(self.data)-self.seq_size+1
+        n = len(self.data) - self.seq_size + 1
+        if self.scheduled_sampling:
+            n -= self.gen_seq_size            # room for the extra "next" block
+        return n
 
     def __getitem__(self, index):
         index_cond = self.cond_seq_size + index
@@ -41,6 +49,11 @@ class LOBDataset(data.Dataset):
             cond = self.orders[index:index_cond]
             x_0 = self.orders[index_cond:index_x]
             lob = self.lob[index:index_cond+1]
+            if self.scheduled_sampling:
+                g = self.gen_seq_size
+                x_0_next = self.orders[index_x:index_x + g]              # the REAL block after x_0
+                lob_shift = self.lob[index + g:index_cond + g + 1]      # book for the shifted cond window
+                return cond, x_0, lob, x_0_next, lob_shift
             return cond, x_0, lob
 
     def _get_data(self):

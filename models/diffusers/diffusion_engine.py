@@ -69,6 +69,21 @@ class DiffusionEngine(LightningModule):
         self._t_steps = 0
         self._t_val_total = 0.0
         self._t_val_steps = 0
+        # ── scheduled sampling (v1, stop-gradient, k=1) ──
+        self._ss_on = cst.SCHEDULED_SAMPLING
+        self._ss_p_max = cst.SS_P_MAX
+        self._ss_ramp_frac = cst.SS_RAMP_FRAC
+        self._ss_gen_seq = config.HYPER_PARAMETERS[LearningHyperParameter.MASKED_SEQ_SIZE]
+        self._ss_used, self._ss_total = 0, 0
+        # prior-corrected nearest-anchor type decode, matching --type-decode prior at inference
+        self._ss_log_prior = torch.log(torch.tensor([0.49, 0.48, 0.03], device=cst.DEVICE))
+        if self._ss_on:
+            steps = len(getattr(self.diffuser, "t", [])) or self.num_diffusionsteps
+            print(f"[scheduled-sampling] ON  p_max={self._ss_p_max} ramp_frac={self._ss_ramp_frac} "
+                  f"rollout_steps={steps} sampler={getattr(self.diffuser, 'sampling_type', '?')}")
+            if steps > 20:
+                print(f"[scheduled-sampling] WARNING: rollout uses {steps} sampler steps — this makes each "
+                      f"self-conditioned training step expensive. Launch with DDIM + small DDIM_NSTEPS (~10).")
         self.save_hyperparameters()
         
 
@@ -119,6 +134,28 @@ class DiffusionEngine(LightningModule):
         cond_depth_emb = self.type_embedder(cond_type.long())
         cond = torch.cat((cond[:, :, :1], cond_depth_emb, cond[:, :, 2:]), dim=2)
         return x_0, cond
+
+    def _ss_prob(self):
+        """Scheduled-sampling probability for the current epoch: 0 early (teacher-forced), ramping to
+        SS_P_MAX over SS_RAMP_FRAC of training."""
+        if not self._ss_on:
+            return 0.0
+        max_ep = getattr(self.trainer, "max_epochs", None) or 1
+        ramp = max(1, int(self._ss_ramp_frac * max_ep))
+        return self._ss_p_max * min(1.0, self.current_epoch / ramp)
+
+    def _decode_type(self, g_emb):
+        """Turn the model's embedded generated block back into RAW orders usable as conditioning:
+        replace the embedded type sub-vector (columns 1:1+size_type_emb) with a prior-corrected
+        nearest-anchor type index (same decode as --type-decode prior), and keep the model's continuous
+        outputs for the other channels. Output width matches cst.LEN_ORDER."""
+        ste = self.size_type_emb
+        type_sub = g_emb[:, :, 1:1 + ste]                                  # (B, G, ste)
+        W = self.type_embedder.weight.to(g_emb.dtype)                      # (num_types, ste)
+        d2 = ((type_sub.unsqueeze(2) - W.view(1, 1, -1, ste)) ** 2).sum(-1)  # (B, G, num_types)
+        score = 0.5 * d2 - self._ss_log_prior.to(g_emb.dtype)             # prior-corrected
+        type_idx = score.argmin(-1, keepdim=True).to(g_emb.dtype)         # (B, G, 1)
+        return torch.cat([g_emb[:, :, :1], type_idx, g_emb[:, :, 1 + ste:]], dim=2)
     
     
     def loss(self):
@@ -133,9 +170,30 @@ class DiffusionEngine(LightningModule):
     def training_step(self, input, batch_idx):
         if self.global_step == 0 and self.IS_WANDB:
             self._define_log_metrics()
-        x_0 = input[1].contiguous()
-        cond_orders = input[0].contiguous()
-        cond_lob = input[2].contiguous()
+        if self._ss_on and len(input) == 5:
+            # scheduled-sampling batch: (cond, x_0, lob, x_0_next, lob_shift)
+            cond_orders, x_0, cond_lob, x_0_next, lob_shift = input
+            self._ss_total += 1
+            if torch.rand(1).item() < self._ss_prob():
+                self._ss_used += 1
+                with torch.no_grad():                              # stop-gradient rollout
+                    lob_in = cond_lob.contiguous() if self.cond_type == 'full' else None
+                    g_emb = self.sample(cond_orders=cond_orders.contiguous(),
+                                        x_0=x_0.contiguous(), cond_lob=lob_in)
+                    g_raw = self._decode_type(g_emb)               # embedded -> raw orders
+                    # slide the window: drop the oldest generated-block worth of real orders, append
+                    # the model's own generated block -> conditioning is now partly self-generated
+                    cond_orders = torch.cat([cond_orders[:, self._ss_gen_seq:, :], g_raw], dim=1)
+                x_0, cond_lob = x_0_next, lob_shift               # score the REAL next block, real shifted book
+            if batch_idx % 1000 == 0:
+                print(f"DIAG scheduled_sampling: p={self._ss_prob():.3f} used={self._ss_used}/{self._ss_total}")
+            x_0 = x_0.contiguous()
+            cond_orders = cond_orders.contiguous()
+            cond_lob = cond_lob.contiguous()
+        else:
+            x_0 = input[1].contiguous()
+            cond_orders = input[0].contiguous()
+            cond_lob = input[2].contiguous()
         x_0.requires_grad_(True)
         cond_orders.requires_grad_(True)
         cond_lob.requires_grad_(True)

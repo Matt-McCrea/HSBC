@@ -51,7 +51,11 @@ class WorldAgent(Agent):
         self.model = model
         self.historical_orders, self.historical_lob = self._load_orders_lob(self.symbol, data_dir, self.date, date_trading_days)
         self.historical_order_ids = self.historical_orders[:, 2]
-        self.unused_order_ids = np.setdiff1d(np.arange(0, 99999999), self.historical_order_ids)
+        # Pool of fresh order IDs that do not collide with the historical ones, consumed one per
+        # placed order (a few tens of thousands per run at most). The old bound of 99999999
+        # materialised a 100M-element array and uniqued it (~800MB, OOM at construction); 5M is
+        # ample headroom and keeps the IDs in the same low, non-colliding range.
+        self.unused_order_ids = np.setdiff1d(np.arange(0, 5_000_000), self.historical_order_ids)
         self.next_orders = None
         self.subscription_requested = False
         self.date_trading_days = date_trading_days

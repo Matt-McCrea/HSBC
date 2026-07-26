@@ -27,6 +27,18 @@ UNCLAMP_DEPTH = (os.environ.get("UNCLAMP_DEPTH", "0") == "1") or os.path.exists(
 # File flag, not just env (env vars silently failed twice on this remote).
 PRICE_REANCHOR = (os.environ.get("PRICE_REANCHOR", "0") == "1") or os.path.exists("PRICE_REANCHOR_FLAG")
 
+# Scheduled-sampling retrain (Stage 3, v1). During training, with a scheduled probability, replace the
+# real conditioning order-history with the model's OWN generated block (self-generated cond_orders),
+# keep the real book state, and train against the real NEXT block. This exposes the model to its own
+# drifted order-flow — the failure Stage 1 isolated (one-sided limit flow) — so it learns to recover.
+# Stop-gradient rollout (self-generated conditioning is augmented input, not backpropped through).
+# File-flag gated (env vars unreliable on this remote); default OFF => the training loop is unchanged.
+# NOTE: launch the retrain with a FAST sampler (DDIM, small DDIM_NSTEPS ~10) so the per-step rollout is
+# cheap; the engine prints the rollout step count and warns if it is large.
+SCHEDULED_SAMPLING = (os.environ.get("SCHEDULED_SAMPLING", "0") == "1") or os.path.exists("SCHEDULED_SAMPLING_FLAG")
+SS_P_MAX = 0.5        # max fraction of training steps that condition on self-generated order-history
+SS_RAMP_FRAC = 0.4    # ramp p from 0 -> SS_P_MAX over this fraction of max_epochs (teacher-forced early)
+
 
 class LearningHyperParameter(str, Enum):
     NUM_DIFFUSIONSTEPS = "num_diffusionsteps"

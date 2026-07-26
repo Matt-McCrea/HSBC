@@ -27,7 +27,7 @@ class DataModule(L.LightningDataModule):
             pin_memory=self.pin_memory,
             drop_last=False,
             num_workers=self.num_workers,
-            persistent_workers=True
+            persistent_workers=(self.num_workers > 0)
         )
 
     def val_dataloader(self):
@@ -38,5 +38,5 @@ class DataModule(L.LightningDataModule):
             pin_memory=self.pin_memory,
             drop_last=False,
             num_workers=self.num_workers,
-            persistent_workers=True
+            persistent_workers=(self.num_workers > 0)
         )

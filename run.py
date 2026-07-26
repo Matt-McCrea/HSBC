@@ -1,5 +1,7 @@
 import lightning as L
 import torch
+import os
+import glob
 from lightning.pytorch.loggers import WandbLogger
 
 import wandb
@@ -41,6 +43,8 @@ def train(config: Configuration, trainer: L.Trainer):
         gen_seq_size=config.HYPER_PARAMETERS[cst.LearningHyperParameter.MASKED_SEQ_SIZE],
         chosen_model=config.CHOSEN_MODEL,
         is_val = False,
+        # scheduled-sampling retrain: TRAIN set only (validation stays teacher-forced)
+        scheduled_sampling=(cst.SCHEDULED_SAMPLING and config.CHOSEN_MODEL == cst.Models.TRADES),
     )
 
     val_set = LOBDataset(
@@ -66,14 +70,30 @@ def train(config: Configuration, trainer: L.Trainer):
         val_set=val_set,
         batch_size=config.HYPER_PARAMETERS[cst.LearningHyperParameter.BATCH_SIZE],
         test_batch_size=config.HYPER_PARAMETERS[cst.LearningHyperParameter.TEST_BATCH_SIZE],
-        num_workers=2
+        # num_workers=0: the dataset is already in-memory tensors, so worker processes add no
+        # throughput and were the source of the epoch-15 dataloader deadlock. Serial loading is
+        # near-free here and removes the hang risk for the long retrain.
+        num_workers=0
     )
     if config.CHOSEN_MODEL == cst.Models.CGAN:
         model = GANEngine(config)
     elif config.CHOSEN_MODEL == cst.Models.TRADES:
         model = DiffusionEngine(config)
     train_dataloader, val_dataloader = data_module.train_dataloader(), data_module.val_dataloader()
-    trainer.fit(model, train_dataloader, val_dataloader)
+    # Resume for the long retrain: if the RESUME_TRAINING_FLAG file is present (file-flag, not an env
+    # var — those silently fail on this remote), pick up from the latest checkpoint so a 3-day job
+    # survives a reclaim. model_checkpointing() keeps one best .ckpt per run, which is a full
+    # Lightning checkpoint (weights + optimizer + epoch), so ckpt_path resumes cleanly.
+    resume_ckpt = None
+    if os.path.exists("RESUME_TRAINING_FLAG"):
+        ckpt_dir = os.path.join(cst.DIR_SAVED_MODEL, str(config.CHOSEN_MODEL.value))
+        cands = sorted(glob.glob(os.path.join(ckpt_dir, "*.ckpt")), key=os.path.getmtime)
+        if cands:
+            resume_ckpt = cands[-1]
+            print(f"[resume] RESUME_TRAINING_FLAG set -> resuming from {resume_ckpt}")
+        else:
+            print(f"[resume] RESUME_TRAINING_FLAG set but no .ckpt in {ckpt_dir}; starting fresh")
+    trainer.fit(model, train_dataloader, val_dataloader, ckpt_path=resume_ckpt)
 
 
 def run(config: Configuration, accelerator, model=None):
