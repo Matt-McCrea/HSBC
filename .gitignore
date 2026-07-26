@@ -1,0 +1,62 @@
+# Data ? never commit (large, machine-specific)
+data/
+
+# file-based feature flags (transient local state, not code)
+UNCLAMP_DEPTH_FLAG
+PRICE_REANCHOR_FLAG
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.ipynb_checkpoints/
+
+# Virtual environments
+venv/
+.venv/
+dmenv/
+env/
+
+# Model outputs
+lightning_logs/
+wandb/
+output/
+
+# Backup files
+*.bak
+*.bak2
+*.backup_before_*
+
+# Log files
+*.log
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# VS Code
+.vscode/settings.json
+
+# Generated outputs (images, plots)
+stylized_custom_outputs/
+
+# Authors's released TRADES-LOB dataset (large; fetch from LeonardoBerti00/DeepMarket LFS)
+data/TRADES-LOB/*.csv
+
+# LaTeX build artifacts
+analysis/*.pdf
+analysis/*.aux
+analysis/*.log
+analysis/*.out
+analysis/*.fls
+analysis/*.fdb_latexmk
+analysis/*.synctex.gz
+
+# cloned external tools (e.g. lob_bench)
+external/
+
+# Local-only working docs (kept on disk, never committed/pushed)
+analysis/dissertation_source_map.md
+analysis/call_prep_qa.md
+analysis/hsbc_update_brief.tex
+analysis/methodology_draft.tex
