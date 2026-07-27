@@ -75,6 +75,7 @@ class DiffusionEngine(LightningModule):
         self._ss_ramp_frac = cst.SS_RAMP_FRAC
         self._ss_gen_seq = config.HYPER_PARAMETERS[LearningHyperParameter.MASKED_SEQ_SIZE]
         self._ss_used, self._ss_total = 0, 0
+        self._last_ckpt_epoch = -1                  # for KEEP_EPOCH_CHECKPOINTS: one save per epoch
         # prior-corrected nearest-anchor type decode, matching --type-decode prior at inference
         self._ss_log_prior = torch.log(torch.tensor([0.49, 0.48, 0.03], device=cst.DEVICE))
         if self._ss_on:
@@ -322,7 +323,14 @@ class DiffusionEngine(LightningModule):
             self._t_val_steps = 0
 
         # model checkpointing
-        if loss_ema < self.min_loss_ema:
+        if cst.KEEP_EPOCH_CHECKPOINTS:
+            # retain one checkpoint per epoch (never deleted) so checkpoints can be trialled on sim
+            # stability rather than val loss. Saves at the first validation of each new epoch.
+            if self.current_epoch != self._last_ckpt_epoch:
+                self._last_ckpt_epoch = self.current_epoch
+                self.model_checkpointing(loss_ema)
+            self.min_loss_ema = min(self.min_loss_ema, loss_ema)
+        elif loss_ema < self.min_loss_ema:
             self.min_loss_ema = loss_ema
             self.model_checkpointing(loss_ema)
 
@@ -373,7 +381,8 @@ class DiffusionEngine(LightningModule):
         wandb.define_metric("val_ema_loss", summary="min")
 
     def model_checkpointing(self, loss):
-        if self.last_path_ckpt_ema is not None:
+        # KEEP_EPOCH_CHECKPOINTS retains every per-epoch checkpoint; otherwise keep only the best.
+        if self.last_path_ckpt_ema is not None and not cst.KEEP_EPOCH_CHECKPOINTS:
             os.remove(self.last_path_ckpt_ema)
         filename_ckpt_ema = ("val_ema=" + str(round(loss, 3)) +
                              "_epoch=" + str(self.current_epoch) +

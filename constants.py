@@ -39,6 +39,13 @@ SCHEDULED_SAMPLING = (os.environ.get("SCHEDULED_SAMPLING", "0") == "1") or os.pa
 SS_P_MAX = 0.5        # max fraction of training steps that condition on self-generated order-history
 SS_RAMP_FRAC = 0.4    # ramp p from 0 -> SS_P_MAX over this fraction of max_epochs (teacher-forced early)
 
+# Keep a checkpoint per epoch during the retrain, instead of only the single best-by-val-loss (which
+# deletes the rest). WHY: val loss is a poor proxy for sim stability — the scheduled-sampling
+# checkpoint that fixed the cross-day drift (val_ema=0.715) was deleted by the best-val logic before we
+# could keep it. With this on we retain one checkpoint per epoch so they can be trialled on stability.
+# File-flag, default off => normal training keeps only the best checkpoint as before.
+KEEP_EPOCH_CHECKPOINTS = (os.environ.get("KEEP_EPOCH_CHECKPOINTS", "0") == "1") or os.path.exists("KEEP_EPOCH_CHECKPOINTS_FLAG")
+
 
 class LearningHyperParameter(str, Enum):
     NUM_DIFFUSIONSTEPS = "num_diffusionsteps"
