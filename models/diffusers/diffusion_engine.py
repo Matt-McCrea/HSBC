@@ -180,7 +180,7 @@ class DiffusionEngine(LightningModule):
                 with torch.no_grad():                              # stop-gradient rollout
                     lob_in = cond_lob.contiguous() if self.cond_type == 'full' else None
                     g_emb = self.sample(cond_orders=cond_orders.contiguous(),
-                                        x_0=x_0.contiguous(), cond_lob=lob_in)
+                                        x=x_0.contiguous(), cond_lob=lob_in)
                     g_raw = self._decode_type(g_emb)               # embedded -> raw orders
                     # slide the window: drop the oldest generated-block worth of real orders, append
                     # the model's own generated block -> conditioning is now partly self-generated
