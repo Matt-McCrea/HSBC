@@ -24,6 +24,12 @@ HP_DICT_MODEL = {
     cst.Models.CGAN: HP_SEARCH_TYPES(HP_CGAN, HP_CGAN_FIXED)
 }
 
+# PyTorch 2.6+ defaults torch.load to weights_only=True; our checkpoints embed these config objects,
+# so allowlist them or resuming (trainer.fit(ckpt_path=...)) fails to unpickle. Mirrors world_agent_sim.
+torch.serialization.add_safe_globals([Configuration, cst.Models, cst.LearningHyperParameter,
+                                      cst.Stocks, cst.Engine])
+
+
 def train(config: Configuration, trainer: L.Trainer):
     print_setup(config)
     train_data_paths = []
