@@ -217,6 +217,9 @@ parser.add_argument('--flow-balance', type=float, default=0.0,
                          '(limit-only; biasing a cancel/market side would thin support). Try 0.5-2.0. 0 = off.')
 parser.add_argument('--flow-balance-window', type=int, default=500,
                     help='Rolling window (number of recent limit orders) for the --flow-balance imbalance.')
+parser.add_argument('--ckpt-path', type=str, default=None,
+                    help='Use this exact checkpoint file, bypassing -id val_ema matching. Lets you trial '
+                         'per-epoch checkpoints that share a rounded val_ema (which -id cannot disambiguate).')
 
 args, remaining_args = parser.parse_known_args()
 
@@ -323,7 +326,9 @@ agent_count += 1
 if args.diffusion:
     dir_path = Path(cst.DIR_SAVED_MODEL + "/" + str(chosen_model.value))
     best_val_loss = np.inf
-    if args.id is None:
+    if args.ckpt_path is not None:
+        checkpoint_reference = Path(args.ckpt_path)   # exact file, bypasses -id val_ema matching
+    elif args.id is None:
         for file in dir_path.iterdir():
             if symbol in file.name:
                 try:
