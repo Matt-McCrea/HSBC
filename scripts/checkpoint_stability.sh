@@ -91,10 +91,14 @@ run () {  # run <ckptfile> <day>
   local REALP; REALP=$(ensure_real "$D")
   echo "-- $tag"
   local S; S=$(mktemp); touch "$S"; local T0; T0=$(date +%s)
+  # each cell writes its OWN small file instead of repeatedly appending to one shared
+  # summary.md — a single flaky NFS write then only costs one cell, not the whole run, and
+  # there's far less repeated open/append contention on one file. Merged into $SUM at the end.
+  local CELL="$OUT_DIR/logs/${tag}.summary.md"
   if ! python -u ABIDES/abides.py -c world_agent_sim -t "$TICKER" -date "$D" -st "$ST" -et "$ET" \
         -d True -m TRADES -type DDIM -nsteps 10 -eta 0.0 --ckpt-path "$CK" -seed "$SEED" $BASE \
         > "$OUT_DIR/logs/${tag}.txt" 2>&1; then
-    echo "  ERROR — see logs/${tag}.txt"; echo "## $tag — ERROR" >> "$SUM"; rm -f "$S"; return; fi
+    echo "  ERROR — see logs/${tag}.txt"; echo "## $tag — ERROR" > "$CELL"; rm -f "$S"; return; fi
   local SECS=$(( $(date +%s) - T0 ))
   # parse the CSV path straight out of the run's own log first (fast); only fall back to a
   # full ABIDES/log tree scan if that fails — the scan is very slow over NFS on a log dir
@@ -105,13 +109,17 @@ run () {  # run <ckptfile> <day>
   { echo "## $tag  (${SECS}s)"; echo '```'; echo "ckpt: $CK"; echo "csv: ${CSV:-none}"
     [[ -n "$CSV" ]] && { echo -n "gen  "; movemetric "$CSV"; }
     [[ -n "$CSV" && -f "$REALP" ]] && python -m evaluation.quantitative_eval.flow_mix --real "$REALP" --gen "$CSV" 2>&1 | grep -E "ORDER_EXECUTED|ORDER_CANCELLED|LIMIT_ORDER|unique mid"
-    echo '```'; echo ""; } >> "$SUM"
+    echo '```'; echo ""; } > "$CELL"
   touch "$DONE"; echo "  done ${SECS}s"
 }
 
 for D in $DAYS; do
   for CK in "${CKPTS[@]}"; do run "$CK" "$D"; done
 done
+
+# merge every cell's own summary file into $SUM now, once, at the end — avoids the repeated
+# per-cell append that stalled earlier.
+for f in "$OUT_DIR"/logs/*.summary.md; do [[ -f "$f" ]] && cat "$f" >> "$SUM"; done
 
 # ranking table: classify each checkpoint's day-cell freeze / stable / drift
 python3 - "$SUM" <<'PY'
