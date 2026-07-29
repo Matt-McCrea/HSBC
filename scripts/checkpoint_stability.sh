@@ -74,7 +74,7 @@ run () {  # run <ckptfile> <day>
   local REALP; REALP=$(ensure_real "$D")
   echo "-- $tag"
   local S; S=$(mktemp); touch "$S"; local T0; T0=$(date +%s)
-  if ! python ABIDES/abides.py -c world_agent_sim -t "$TICKER" -date "$D" -st "$ST" -et "$ET" \
+  if ! python -u ABIDES/abides.py -c world_agent_sim -t "$TICKER" -date "$D" -st "$ST" -et "$ET" \
         -d True -m TRADES -type DDIM -nsteps 10 -eta 0.0 --ckpt-path "$CK" -seed "$SEED" $BASE \
         > "$OUT_DIR/logs/${tag}.txt" 2>&1; then
     echo "  ERROR — see logs/${tag}.txt"; echo "## $tag — ERROR" >> "$SUM"; rm -f "$S"; return; fi
