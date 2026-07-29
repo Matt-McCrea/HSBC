@@ -74,8 +74,11 @@ echo "=== killing any other GPU-using processes ==="
 pkill -f abides.py 2>/dev/null
 pkill -f checkpoint_stability.sh 2>/dev/null
 pkill -f single_ckpt 2>/dev/null
-pkill -f adaptive_ckpt_search.sh 2>/dev/null   # in case a stale prior invocation is still around
 pkill -f main.py 2>/dev/null
+# kill stale prior invocations of THIS script only — exclude our own PID ($$) and our parent
+# ($PPID), since "pkill -f adaptive_ckpt_search.sh" would otherwise match and kill ourselves
+# (our own command line contains that string) before doing anything else.
+pgrep -f adaptive_ckpt_search.sh | grep -vE "^($$|$PPID)\$" | xargs -r kill 2>/dev/null
 sleep 2
 echo "GPU state now:"
 nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv 2>/dev/null || echo "  (nvidia-smi unavailable)"
