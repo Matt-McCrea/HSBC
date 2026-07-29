@@ -96,7 +96,12 @@ run () {  # run <ckptfile> <day>
         > "$OUT_DIR/logs/${tag}.txt" 2>&1; then
     echo "  ERROR — see logs/${tag}.txt"; echo "## $tag — ERROR" >> "$SUM"; rm -f "$S"; return; fi
   local SECS=$(( $(date +%s) - T0 ))
-  local CSV; CSV=$(find ABIDES/log -name processed_orders.csv -newer "$S" ! -path "*market_replay*" 2>/dev/null | sort | tail -1); rm -f "$S"
+  # parse the CSV path straight out of the run's own log first (fast); only fall back to a
+  # full ABIDES/log tree scan if that fails — the scan is very slow over NFS on a log dir
+  # that's accumulated months of run folders.
+  local CSV; CSV=$(grep -oE '/[^ ]+processed_orders\.csv' "$OUT_DIR/logs/${tag}.txt" | tail -1)
+  [[ -n "$CSV" && -f "$CSV" ]] || CSV=$(find ABIDES/log -name processed_orders.csv -newer "$S" ! -path "*market_replay*" 2>/dev/null | sort | tail -1)
+  rm -f "$S"
   { echo "## $tag  (${SECS}s)"; echo '```'; echo "ckpt: $CK"; echo "csv: ${CSV:-none}"
     [[ -n "$CSV" ]] && { echo -n "gen  "; movemetric "$CSV"; }
     [[ -n "$CSV" && -f "$REALP" ]] && python -m evaluation.quantitative_eval.flow_mix --real "$REALP" --gen "$CSV" 2>&1 | grep -E "ORDER_EXECUTED|ORDER_CANCELLED|LIMIT_ORDER|unique mid"
