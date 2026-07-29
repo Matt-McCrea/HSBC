@@ -13,12 +13,13 @@
 #         bash scripts/checkpoint_stability.sh --oldest-first
 set -uo pipefail
 TICKER="INTC"; ST="09:30:00"; ET="10:00:00"
-CKPT_DIR="data/checkpoints/TRADES"; DAYS="20150107"; SEED="30"; NEWEST_FIRST=1
+CKPT_DIR="data/checkpoints/TRADES"; DAYS="20150107"; SEED="30"; NEWEST_FIRST=1; PRIORITY=""
 BASE="--depth-noise 0.3 --size-reshape --type-decode prior"
 OUT_DIR="ckpt_stability/$(date +%Y%m%d_%H%M%S)"
 while [[ $# -gt 0 ]]; do case "$1" in
   --days) DAYS="$2"; shift 2;; --seed) SEED="$2"; shift 2;; --out-dir) OUT_DIR="$2"; shift 2;;
   --ckpt-dir) CKPT_DIR="$2"; shift 2;; --oldest-first) NEWEST_FIRST=0; shift;;
+  --priority) PRIORITY="$2"; shift 2;;
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
 mkdir -p "$OUT_DIR/logs"; SUM="$OUT_DIR/summary.md"
 
@@ -35,6 +36,22 @@ PRECHECK=$(python3 -c "import constants as cst; print(cst.UNCLAMP_DEPTH, cst.PRI
 if [[ "$NEWEST_FIRST" == "1" ]]; then mapfile -t CKPTS < <(ls -t "$CKPT_DIR"/*.ckpt 2>/dev/null)
 else mapfile -t CKPTS < <(ls "$CKPT_DIR"/*.ckpt 2>/dev/null); fi
 [[ ${#CKPTS[@]} -gt 0 ]] || { echo "!! no .ckpt in $CKPT_DIR"; exit 1; }
+
+# --priority "0.724_epoch=0 0.7_epoch=2" pulls matching checkpoints to the front, in the order given
+# (e.g. known-good baselines first for a sanity check), leaving the rest in their existing order.
+if [[ -n "$PRIORITY" ]]; then
+  declare -a PRI_CKPTS=() REST_CKPTS=() ORDERED_PRI=()
+  for CK in "${CKPTS[@]}"; do
+    matched=0
+    for P in $PRIORITY; do [[ "$CK" == *"$P"* ]] && { matched=1; break; }; done
+    if [[ $matched -eq 1 ]]; then PRI_CKPTS+=("$CK"); else REST_CKPTS+=("$CK"); fi
+  done
+  for P in $PRIORITY; do
+    for CK in "${PRI_CKPTS[@]}"; do [[ "$CK" == *"$P"* ]] && ORDERED_PRI+=("$CK"); done
+  done
+  CKPTS=("${ORDERED_PRI[@]}" "${REST_CKPTS[@]}")
+  echo "priority order applied: ${ORDERED_PRI[*]##*/}"
+fi
 echo "# Checkpoint stability — $(date '+%F %T')  days=[$DAYS] seed=$SEED  ${#CKPTS[@]} checkpoints" > "$SUM"
 echo "checkpoints: ${#CKPTS[@]}  days: $DAYS  (newest-first=$NEWEST_FIRST)  out: $OUT_DIR"
 
