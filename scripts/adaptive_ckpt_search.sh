@@ -12,21 +12,34 @@
 # This is a fast triage pass (pass/fail + basic uniq_mid/ret1s_std), not the full flow_mix/
 # LOB-Bench comparison — run those afterward on the winning checkpoint's saved CSVs.
 #
-# Usage:  bash scripts/adaptive_ckpt_search.sh
-#         bash scripts/adaptive_ckpt_search.sh --cap-secs 2700     # widen the cap
+# Usage (LONG — full month, all checkpoints, ~up to 2 days worst case):
+#   bash scripts/adaptive_ckpt_search.sh --out-tag long
+#
+# Usage (SHORT — one hard day, a chosen subset of checkpoints, fits a ~2h window):
+#   bash scripts/adaptive_ckpt_search.sh --out-tag short --days "20150107" \
+#     --ckpts "0.69_epoch=2 0.704_epoch=1 0.721_epoch=2 0.681_epoch=3" --cap-secs 1800
+#
+# Run both at once on two different machines (they share the project filestore) — --out-tag
+# keeps their output dirs and "latest" symlinks distinct so they don't clobber each other.
 set -uo pipefail
 
 CKPT_DIR="data/checkpoints/TRADES"
 TICKER="INTC"; ST="09:30:00"; ET="10:00:00"; SEED="30"
 BASE="--depth-noise 0.3 --size-reshape --type-decode prior"
 CAP_SECS=2400   # 40 min per-day cap
+CKPTS_ARG=""    # space-separated substrings to match against ckpt filenames, in priority order
+DAYS_ARG=""     # space-separated days; empty = full month
+OUT_TAG="run"
 
 while [[ $# -gt 0 ]]; do case "$1" in
   --cap-secs) CAP_SECS="$2"; shift 2;;
+  --ckpts) CKPTS_ARG="$2"; shift 2;;
+  --days) DAYS_ARG="$2"; shift 2;;
+  --out-tag) OUT_TAG="$2"; shift 2;;
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
 
-# known-good baselines first, then the rest of the recovered set
-PRIORITY_CKPTS=(
+# default priority order: known-good baselines first, then the rest of the recovered set
+DEFAULT_PRIORITY_CKPTS=(
   "val_ema=0.724_epoch=0_INTC_se_256_au_64_CD_8_seed_30.ckpt"
   "val_ema=0.7_epoch=2_INTC_se_256_au_64_CD_8_seed_30.ckpt"
   "val_ema=0.69_epoch=2_INTC_se_256_au_64_CD_8_seed_30.ckpt"
@@ -34,13 +47,25 @@ PRIORITY_CKPTS=(
   "val_ema=0.721_epoch=2_INTC_se_256_au_64_CD_8_seed_30.ckpt"
   "val_ema=0.681_epoch=3_INTC_se_256_au_64_CD_8_seed_30.ckpt"
 )
-# hardest/known-drift days first, so a bad checkpoint fails fast rather than late
-DAYS=(20150107 20150129 20150102 20150105 20150106 20150108 20150109 20150112 20150113 20150114 20150115 20150116 20150120 20150121 20150122 20150123 20150126 20150127 20150128 20150130)
+if [[ -n "$CKPTS_ARG" ]]; then
+  PRIORITY_CKPTS=()
+  for SUB in $CKPTS_ARG; do
+    for F in "${DEFAULT_PRIORITY_CKPTS[@]}"; do
+      [[ "$F" == *"$SUB"* ]] && PRIORITY_CKPTS+=("$F")
+    done
+  done
+else
+  PRIORITY_CKPTS=("${DEFAULT_PRIORITY_CKPTS[@]}")
+fi
 
-OUT_DIR="ckpt_search/$(date +%Y%m%d_%H%M%S)"
+# hardest/known-drift days first, so a bad checkpoint fails fast rather than late
+if [[ -n "$DAYS_ARG" ]]; then DAYS=($DAYS_ARG)
+else DAYS=(20150107 20150129 20150102 20150105 20150106 20150108 20150109 20150112 20150113 20150114 20150115 20150116 20150120 20150121 20150122 20150123 20150126 20150127 20150128 20150130); fi
+
+OUT_DIR="ckpt_search/${OUT_TAG}_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$OUT_DIR/logs"
 mkdir -p ckpt_search
-ln -sfn "$(basename "$OUT_DIR")" ckpt_search/latest
+ln -sfn "$(basename "$OUT_DIR")" "ckpt_search/latest-${OUT_TAG}"
 STATUS="$OUT_DIR/STATUS.txt"
 PROGRESS="$OUT_DIR/progress.txt"
 : > "$PROGRESS"
@@ -152,5 +177,5 @@ else
 fi
 
 echo ""
-echo "=== SEARCH COMPLETE — live view any time: cat ckpt_search/latest/STATUS.txt ==="
+echo "=== SEARCH COMPLETE — live view any time: cat ckpt_search/latest-${OUT_TAG}/STATUS.txt ==="
 cat "$STATUS"
