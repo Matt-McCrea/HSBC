@@ -37,11 +37,12 @@ PRICE_REANCHOR = (os.environ.get("PRICE_REANCHOR", "0") == "1") or os.path.exist
 # cheap; the engine prints the rollout step count and warns if it is large.
 SCHEDULED_SAMPLING = (os.environ.get("SCHEDULED_SAMPLING", "0") == "1") or os.path.exists("SCHEDULED_SAMPLING_FLAG")
 SS_P_MAX = 0.5        # max fraction of training steps that condition on self-generated order-history
-SS_RAMP_FRAC = 0.2    # ramp p from 0 -> SS_P_MAX over this fraction of max_epochs (teacher-forced early)
-# was 0.4 (20-epoch ramp on EPOCHS=50) -- shortened to fit a ~24h/10-15 epoch session and actually
-# reach full SS_P_MAX strength within it. Resuming from an already-converged, stable checkpoint
-# (not training from scratch) makes a faster ramp less risky than the usual scheduled-sampling case,
-# since self-generated conditioning is already reasonably good rather than early-training garbage.
+SS_RAMP_FRAC = 0.0    # ramp p from 0 -> SS_P_MAX over this fraction of max_epochs (teacher-forced early)
+# was 0.4, then 0.2 -- now effectively no ramp (the max(1,...) floor in _ss_prob still gives one fully
+# teacher-forced epoch before jumping to full SS_P_MAX). Dropped the gradual ramp entirely: current_epoch
+# resets on every resume in this setup, so a multi-epoch ramp mostly just re-runs the cheap low-exposure
+# epochs each time instead of banking time at full strength. Also empirically supported -- val_ema kept
+# improving through epoch 6 even as exposure rose under the old ramp, no sign the model needs it eased in.
 
 # Keep a checkpoint per epoch during the retrain, instead of only the single best-by-val-loss (which
 # deletes the rest). WHY: val loss is a poor proxy for sim stability — the scheduled-sampling
