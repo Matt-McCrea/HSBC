@@ -23,7 +23,12 @@ class Configuration:
         self.CHOSEN_MODEL = cst.Models.TRADES
         self.CHOSEN_AUGMENTER = "MLP"
         self.CHOSEN_COND_AUGMENTER = "MLP"
-        self.SAMPLING_TYPE = "DDPM" #it can be DDPM or DDIM
+        # DDIM: only used by self.diffuser.sample() — the scheduled-sampling training rollout, and
+        # simulation-time generation (world_agent_sim.py overrides this via -type CLI arg anyway).
+        # Normal per-step training/validation never calls .sample(), so this is inert unless SS is on.
+        # Was "DDPM" (100 steps, NUM_DIFFUSIONSTEPS) — made every SS rollout ~10x more expensive than
+        # necessary since DDIM_NSTEPS=10 was already configured but unused. Fixed 2026-07-30.
+        self.SAMPLING_TYPE = "DDIM" #it can be DDPM or DDIM
         self.USE_ENGINE = cst.Engine.DIFFUSION_ENGINE
         
         if self.CHOSEN_MODEL == cst.Models.CGAN:
