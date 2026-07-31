@@ -37,7 +37,11 @@ PRICE_REANCHOR = (os.environ.get("PRICE_REANCHOR", "0") == "1") or os.path.exist
 # cheap; the engine prints the rollout step count and warns if it is large.
 SCHEDULED_SAMPLING = (os.environ.get("SCHEDULED_SAMPLING", "0") == "1") or os.path.exists("SCHEDULED_SAMPLING_FLAG")
 SS_P_MAX = 0.5        # max fraction of training steps that condition on self-generated order-history
-SS_RAMP_FRAC = 0.4    # ramp p from 0 -> SS_P_MAX over this fraction of max_epochs (teacher-forced early)
+SS_RAMP_FRAC = 0.2    # ramp p from 0 -> SS_P_MAX over this fraction of max_epochs (teacher-forced early)
+# was 0.4 (20-epoch ramp on EPOCHS=50) -- shortened to fit a ~24h/10-15 epoch session and actually
+# reach full SS_P_MAX strength within it. Resuming from an already-converged, stable checkpoint
+# (not training from scratch) makes a faster ramp less risky than the usual scheduled-sampling case,
+# since self-generated conditioning is already reasonably good rather than early-training garbage.
 
 # Keep a checkpoint per epoch during the retrain, instead of only the single best-by-val-loss (which
 # deletes the rest). WHY: val loss is a poor proxy for sim stability — the scheduled-sampling
