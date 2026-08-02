@@ -12,12 +12,14 @@
 # This is a fast triage pass (pass/fail + basic uniq_mid/ret1s_std), not the full flow_mix/
 # LOB-Bench comparison — run those afterward on the winning checkpoint's saved CSVs.
 #
-# Usage (LONG — full month, all checkpoints, ~up to 2 days worst case):
+# Usage (LONG — full month, every checkpoint currently in the dir, newest-first, ~up to 2 days
+# worst case):
 #   bash scripts/adaptive_ckpt_search.sh --out-tag long
 #
-# Usage (SHORT — one hard day, a chosen subset of checkpoints, fits a ~2h window):
+# Usage (SHORT — one hard day, a chosen subset by substring match on the real filenames present,
+# fits a ~2h window):
 #   bash scripts/adaptive_ckpt_search.sh --out-tag short --days "20150107" \
-#     --ckpts "0.69_epoch=2 0.704_epoch=1 0.721_epoch=2 0.681_epoch=3" --cap-secs 1800
+#     --ckpts "epoch=2 epoch=3" --cap-secs 1800
 #
 # Run both at once on two different machines (they share the project filestore) — --out-tag
 # keeps their output dirs and "latest" symlinks distinct so they don't clobber each other.
@@ -38,24 +40,21 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --out-tag) OUT_TAG="$2"; shift 2;;
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
 
-# default priority order: known-good baselines first, then the rest of the recovered set
-DEFAULT_PRIORITY_CKPTS=(
-  "val_ema=0.724_epoch=0_INTC_se_256_au_64_CD_8_seed_30.ckpt"
-  "val_ema=0.7_epoch=2_INTC_se_256_au_64_CD_8_seed_30.ckpt"
-  "val_ema=0.69_epoch=2_INTC_se_256_au_64_CD_8_seed_30.ckpt"
-  "val_ema=0.704_epoch=1_INTC_se_256_au_64_CD_8_seed_30.ckpt"
-  "val_ema=0.721_epoch=2_INTC_se_256_au_64_CD_8_seed_30.ckpt"
-  "val_ema=0.681_epoch=3_INTC_se_256_au_64_CD_8_seed_30.ckpt"
-)
+# auto-discover whatever's actually in the checkpoint dir right now — newest-first by mtime, so
+# the most recently trained epochs (most likely to reflect the retrain's current behavior) go
+# first. --ckpts filters this real list by substring; it no longer refers to a fixed hardcoded set.
+mapfile -t ALL_CKPTS < <(cd "$CKPT_DIR" 2>/dev/null && ls -t -- *.ckpt 2>/dev/null)
+[[ ${#ALL_CKPTS[@]} -gt 0 ]] || { echo "!! no .ckpt files in $CKPT_DIR"; exit 1; }
+
 if [[ -n "$CKPTS_ARG" ]]; then
   PRIORITY_CKPTS=()
   for SUB in $CKPTS_ARG; do
-    for F in "${DEFAULT_PRIORITY_CKPTS[@]}"; do
+    for F in "${ALL_CKPTS[@]}"; do
       [[ "$F" == *"$SUB"* ]] && PRIORITY_CKPTS+=("$F")
     done
   done
 else
-  PRIORITY_CKPTS=("${DEFAULT_PRIORITY_CKPTS[@]}")
+  PRIORITY_CKPTS=("${ALL_CKPTS[@]}")
 fi
 
 # hardest/known-drift days first, so a bad checkpoint fails fast rather than late
