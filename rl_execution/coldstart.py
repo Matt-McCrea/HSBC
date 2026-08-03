@@ -31,6 +31,7 @@ from rl_execution.orderbook_reconstructor import (
     MESSAGE_COLUMNS,
     aggregate_levels,
     reconstruct_book,
+    reconstruct_book_from_frame,
 )
 from utils.utils_data import compute_price_anchor, preprocess_orders_for_diff_cond, z_score_orderbook_for_cond
 
@@ -122,20 +123,27 @@ class ColdStartResult:
 def seed_episode(message_path, orderbook_path, t0: float, normalization_terms,
                   cond_seq_size: int = 255, seq_len: int = 256,
                   market_open: float = DEFAULT_MARKET_OPEN, cond_clip: float = 0.0,
-                  fix_lob_pad: bool = False) -> ColdStartResult:
+                  fix_lob_pad: bool = False, messages=None, orderbook=None) -> ColdStartResult:
     """Build everything needed to seed an RL episode at t0: the reconstructed
     resting book plus the model's conditioning tensors. Does not touch ABIDES
     or the model -- see rl_execution/env.py for wiring this into a live Kernel
     (load the resting_orders into the exchange's OrderBook via enterOrder, and
     pass cond_orders/cond_lob straight to RLWorldAgent).
+
+    messages/orderbook: optional pre-read DataFrames for this day. Pass them if
+        the caller already read the day (as ExecutionEnv.reset does) -- the
+        orderbook CSV alone is ~200MB, so re-reading it per episode is a
+        material chunk of the per-episode cost this whole architecture exists
+        to remove.
     """
-    messages, orderbook = read_day(message_path, orderbook_path)
+    if messages is None or orderbook is None:
+        messages, orderbook = read_day(message_path, orderbook_path)
 
     price_anchor = 0.0
     if cst.PRICE_REANCHOR:
         price_anchor = float(compute_price_anchor(orderbook))
 
-    resting_orders = reconstruct_book(message_path, t0, market_open=market_open)
+    resting_orders = reconstruct_book_from_frame(messages, t0, market_open=market_open)
 
     orders_raw, lob_raw = build_conditioning_window(
         messages, orderbook, t0, cond_seq_size=cond_seq_size, seq_len=seq_len)
@@ -161,7 +169,7 @@ def seed_episode(message_path, orderbook_path, t0: float, normalization_terms,
     )
 
 
-def seed_exchange_book(exchange, symbol: str, resting_orders: dict, session_date):
+def seed_exchange_book(exchange, symbol: str, resting_orders: dict, session_date, owner_agent_id: int):
     """Load reconstructed resting orders directly into the ABIDES exchange's
     OrderBook via the existing OrderBook.enterOrder (no matching -- these are
     already-resting, non-crossing orders by construction) -- avoids the
@@ -171,6 +179,15 @@ def seed_exchange_book(exchange, symbol: str, resting_orders: dict, session_date
     session_date: pandas.Timestamp for the trading day (midnight), used to
         convert each order's LOBSTER seconds-since-midnight entry_time into an
         absolute timestamp for LimitOrder.time_placed.
+    owner_agent_id: which agent these resting orders belong to. MUST be the
+        WorldAgent, matching a normal (replay-based) run, where the WorldAgent
+        places every historical order itself via placeLimitOrder -- so every
+        resting order in the book is owned by it. Attributing them to the
+        EXCHANGE instead makes the exchange send ORDER_EXECUTED to *itself*
+        when a seeded order is matched, and that message carries no 'sender'
+        key -> KeyError in ExchangeAgent.receiveMessage. It also matters
+        semantically: the owner receives the execution/cancel notifications
+        that feed the WorldAgent's conditioning history.
     """
     from util.order.LimitOrder import LimitOrder
 
@@ -178,7 +195,7 @@ def seed_exchange_book(exchange, symbol: str, resting_orders: dict, session_date
     ordered = sorted(resting_orders.values(), key=lambda o: o.entry_time)
     for o in ordered:
         limit_order = LimitOrder(
-            agent_id=exchange.id,
+            agent_id=owner_agent_id,
             time_placed=session_date + pd.Timedelta(seconds=o.entry_time),
             symbol=symbol,
             quantity=o.size,

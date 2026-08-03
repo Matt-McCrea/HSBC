@@ -246,13 +246,17 @@ def preprocess_orders_for_diff_cond(orders, lob_snapshots, normalization_terms,
         index = j
         if direction == 1:
             bid_side = lob_dataframe.iloc[index, 2::4]
-            bid_price = bid_side[0]
+            # .iloc[0]: positional, not label-based. Plain [0] on a Series is deprecated
+            # (pandas FutureWarning) and in a future pandas would silently switch to
+            # label lookup -- which here would raise, since this Series is indexed by
+            # column NAME ("buy1", ...), not by integer.
+            bid_price = bid_side.iloc[0]
             depth = (bid_price - order_price) // 100
             if depth < 0 and not cst.UNCLAMP_DEPTH:  # match training: keep signed depth iff unclamped
                 depth = 0
         else:
             ask_side = lob_dataframe.iloc[index, 0::4]
-            ask_price = ask_side[0]
+            ask_price = ask_side.iloc[0]
             depth = (order_price - ask_price) // 100
             if depth < 0 and not cst.UNCLAMP_DEPTH:
                 depth = 0

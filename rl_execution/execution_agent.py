@@ -69,25 +69,57 @@ class RLExecutionAgent(TradingAgent):
         self.fills = []  # list of (qty, fill_price)
         self.state = "AWAITING_WAKEUP"
         self._finalizing = False
+        self._finalized = False
+        self._anchor = None        # sim time of the first tradeable wakeup; the schedule's origin
+        self._awaiting_action = False
+        self._scheduled_times = set()
 
     def getWakeFrequency(self):
         return DECISION_INTERVAL
+
+    def _schedule(self, when):
+        """setWakeup, deduplicated. TradingAgent schedules its own wakeup once it
+        learns the market hours (TradingAgent.receiveMessage), independently of
+        ours -- without dedupe, two wakeups land at the same sim time and two
+        decision points fire at once, silently compressing the 10-decision
+        schedule and consuming two actions at the same instant.
+        """
+        if when not in self._scheduled_times:
+            self._scheduled_times.add(when)
+            self.setWakeup(when)
 
     def wakeup(self, currentTime):
         can_trade = super().wakeup(currentTime)
         if self._finalizing:
             self._finalize(currentTime)
             return
-        self.setWakeup(currentTime + (FINALIZE_DELAY if self._about_to_finalize() else DECISION_INTERVAL))
         if not can_trade:
+            # TradingAgent schedules the next wakeup itself once it knows market hours.
             return
-        if self.decision_index >= N_DECISIONS:
+        if self.decision_index >= N_DECISIONS or self._awaiting_action:
             return
+        if self._anchor is None:
+            # Anchor the decision schedule to the first tradeable moment rather than to
+            # kernel start: the first wakeup is consumed learning the market hours, so
+            # decision 0 cannot happen at exactly t0.
+            self._anchor = currentTime
+        target = self._anchor + self.decision_index * DECISION_INTERVAL
+        if currentTime < target:
+            self._schedule(target)
+            return
+        self._awaiting_action = True
         self.state = "AWAITING_SPREAD"
         self.getCurrentSpread(self.symbol, depth=10)
 
-    def _about_to_finalize(self):
-        return self.decision_index == N_DECISIONS - 1
+    def kernelTerminating(self):
+        """Safety net: if the kernel ends for any reason before the episode
+        finalized (stop time reached early, an agent error, an unexpected
+        schedule), the env would otherwise block forever on state_queue.get().
+        Always emit a terminal message.
+        """
+        if not self._finalized:
+            self._finalize(self.currentTime, reason="kernel_terminated_before_finalize")
+        super().kernelTerminating()
 
     def receiveMessage(self, currentTime, msg):
         super().receiveMessage(currentTime, msg)
@@ -111,13 +143,24 @@ class RLExecutionAgent(TradingAgent):
 
         action = self.action_queue.get()  # blocks the Kernel thread until env.step() supplies one
 
-        is_last = self._about_to_finalize()
+        is_last = self.decision_index == N_DECISIONS - 1
+        # On the last decision, sweep whatever inventory remains -- the parent order must
+        # complete within the window for implementation shortfall to be well defined
+        # (the standard Almgren-Chriss terminal constraint).
         qty = self.rem_quantity if is_last else self._child_order_qty(action)
         if qty > 0:
             self._place_child_order(action, qty, best_bid, best_ask)
+
         self.decision_index += 1
+        self._awaiting_action = False
+        self.state = "AWAITING_WAKEUP"
         if is_last:
             self._finalizing = True
+            # Let the final orders rest/fill for one more interval, so the episode covers
+            # the full 5-minute window and last-slice fills are actually captured.
+            self._schedule(self.currentTime + DECISION_INTERVAL)
+        else:
+            self._schedule(self._anchor + self.decision_index * DECISION_INTERVAL)
 
     def _child_order_qty(self, action_idx):
         base_slice = self.quantity / N_DECISIONS
@@ -163,12 +206,18 @@ class RLExecutionAgent(TradingAgent):
             "ofi_bucket": ofi_bucket,
         }
 
-    def _finalize(self, currentTime):
+    def _finalize(self, currentTime, reason="completed"):
+        if self._finalized:
+            return
+        self._finalized = True
+        self._finalizing = False
         shortfall = self._compute_shortfall()
         info = {
             "fills": list(self.fills),
             "rem_quantity": self.rem_quantity,
             "shortfall": shortfall,
+            "decisions_made": self.decision_index,
+            "termination_reason": reason,
         }
         self.state_queue.put(("done", -shortfall, info))
 

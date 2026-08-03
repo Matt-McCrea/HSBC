@@ -37,6 +37,12 @@ from rl_execution.rl_world_agent import RLWorldAgent
 
 EPISODE_SECONDS = N_DECISIONS * 30  # 5 minutes, fixed by the spec
 
+# Agent ids within an episode's Kernel. The exchange must be 0 (TradingAgent.kernelStarting
+# finds it by type, but WorldAgent._update_active_limit_orders hardcodes agents[0]).
+EXCHANGE_AGENT_ID = 0
+WORLD_AGENT_ID = 1
+EXEC_AGENT_ID = 2
+
 
 def find_best_checkpoint(symbol, chosen_model=None):
     chosen_model = chosen_model or cst.Models.TRADES
@@ -146,24 +152,28 @@ class ExecutionEnv:
         reconstruct_start = _time.perf_counter()
         cs = coldstart.seed_episode(
             message_path, orderbook_path, t0, self.normalization_terms,
-            cond_seq_size=self.cond_seq_size, seq_len=self.seq_len)
+            cond_seq_size=self.cond_seq_size, seq_len=self.seq_len,
+            messages=messages, orderbook=orderbook)  # reuse the frames already read above
         self._reconstruct_elapsed = _time.perf_counter() - reconstruct_start
         p_arrival = float((cs.lob_raw[-1, 0] + cs.lob_raw[-1, 2]) / 2.0)
 
         session_date = pd.Timestamp(seed_day)
         kernel_start = session_date + pd.Timedelta(seconds=t0)
-        kernel_stop = kernel_start + pd.Timedelta(seconds=EPISODE_SECONDS) + pd.Timedelta(seconds=1)
+        # Headroom past the nominal episode length: the agent's decision schedule is
+        # anchored at its first *tradeable* wakeup (slightly after kernel start) and it
+        # finalizes one interval after the last decision, so the kernel must outlive
+        # EPISODE_SECONDS by more than a hair.
+        kernel_stop = kernel_start + pd.Timedelta(seconds=EPISODE_SECONDS + 60)
 
         exchange = ExchangeAgent(
-            id=0, name="EXCHANGE_AGENT", type="ExchangeAgent",
+            id=EXCHANGE_AGENT_ID, name="EXCHANGE_AGENT", type="ExchangeAgent",
             mkt_open=kernel_start, mkt_close=kernel_stop, symbols=[self.symbol],
             log_orders=False, pipeline_delay=0, computation_delay=0,
             stream_history=2_500_000, book_freq=0, wide_book=True,
             random_state=np.random.RandomState(seed=self.rng.randint(0, 2**31)))
-        coldstart.seed_exchange_book(exchange, self.symbol, cs.resting_orders, session_date)
 
         world_agent = RLWorldAgent(
-            id=1, name="WORLD_AGENT", type="WorldAgent", symbol=self.symbol,
+            id=WORLD_AGENT_ID, name="WORLD_AGENT", type="WorldAgent", symbol=self.symbol,
             date=str(session_date.date()), date_trading_days=cst.DATE_TRADING_DAYS,
             model=self.model, data_dir=self.data_dir, cond_type=self.config.COND_TYPE,
             cond_seq_size=self.cond_seq_size, seq_len=self.seq_len,
@@ -172,13 +182,19 @@ class ExecutionEnv:
             normalization_terms=self.normalization_terms, chosen_model="TRADES",
             gen_seq_size=self.config.HYPER_PARAMETERS[cst.LearningHyperParameter.MASKED_SEQ_SIZE],
             depth_noise=self.depth_noise,
-            seed_placed_orders=cs.orders_raw, seed_lob_snapshots=cs.lob_raw)
+            seed_placed_orders=cs.orders_raw, seed_lob_snapshots=cs.lob_raw,
+            seed_price_anchor=cs.price_anchor, protected_agent_ids=(EXEC_AGENT_ID,))
         self._world_agent = world_agent
+
+        # Seeded resting orders must belong to the WorldAgent, exactly as in a normal
+        # replay-based run -- see seed_exchange_book's docstring.
+        coldstart.seed_exchange_book(exchange, self.symbol, cs.resting_orders, session_date,
+                                      owner_agent_id=world_agent.id)
 
         self._state_queue = queue.Queue()
         self._action_queue = queue.Queue()
         exec_agent = RLExecutionAgent(
-            id=2, name="RL_EXECUTION_AGENT", type="ExecutionAgent", symbol=self.symbol,
+            id=EXEC_AGENT_ID, name="RL_EXECUTION_AGENT", type="ExecutionAgent", symbol=self.symbol,
             direction=side, quantity=Q, p_arrival=p_arrival, start_time=kernel_start,
             state_queue=self._state_queue, action_queue=self._action_queue,
             random_state=np.random.RandomState(seed=self.rng.randint(0, 2**31)))
@@ -210,7 +226,16 @@ class ExecutionEnv:
         self._kernel_thread.start()
 
         msg = self._state_queue.get()
-        obs, _, _, info = self._unpack(msg)
+        obs, _, done, info = self._unpack(msg)
+        if done:
+            # The episode terminated before offering a single decision point (e.g. the
+            # agent never became tradeable and RLExecutionAgent.kernelTerminating's
+            # safety net fired). Fail loudly rather than hand back obs=None, which would
+            # blow up later inside the caller's policy with a far less obvious error.
+            self._episode_active = False
+            raise RuntimeError(
+                f"episode ended before the first decision point (info={info}) -- "
+                "check the kernel start/stop window and the agent's wakeup schedule")
         return obs, info
 
     def step(self, action):
