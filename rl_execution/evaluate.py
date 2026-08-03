@@ -33,7 +33,7 @@ def generate_held_out_seeds(data_dir, symbol, n_seeds, seq_len=256, episode_seco
     seed_days = seed_days or env_module.list_trading_days(data_dir, symbol)
     seeds = []
     for _ in range(n_seeds):
-        day = rng.choice(seed_days)
+        day = str(rng.choice(seed_days))
         message_path, orderbook_path = coldstart._day_paths(data_dir, symbol, day)
         messages, _ = coldstart.read_day(message_path, orderbook_path)
         lo = float(messages["time"].iloc[seq_len + 10])

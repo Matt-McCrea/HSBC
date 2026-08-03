@@ -128,7 +128,9 @@ class ExecutionEnv:
         if seed is not None:
             self.rng = np.random.RandomState(seed)
 
-        seed_day = seed_day or self.rng.choice(self.seed_days)
+        # str(...): np.random.RandomState.choice() on a list of strings returns numpy.str_,
+        # which pandas.Timestamp (used below) rejects even though it's a str subclass.
+        seed_day = str(seed_day) if seed_day else str(self.rng.choice(self.seed_days))
         message_path, orderbook_path = coldstart._day_paths(self.data_dir, self.symbol, seed_day)
         messages, orderbook = coldstart.read_day(message_path, orderbook_path)
 
@@ -138,7 +140,7 @@ class ExecutionEnv:
             lo = float(messages["time"].iloc[self.seq_len + 10])
             hi = float(messages["time"].iloc[-1]) - EPISODE_SECONDS - 5
             t0 = float(self.rng.uniform(lo, hi))
-        side = side or self.rng.choice(["BUY", "SELL"])
+        side = str(side) if side else str(self.rng.choice(["BUY", "SELL"]))
         Q = Q or int(self.rng.randint(self.Q_range[0], self.Q_range[1]))
 
         reconstruct_start = _time.perf_counter()
