@@ -19,26 +19,61 @@ N_SPREAD_BUCKETS = 4  # matches execution_agent.SPREAD_BUCKETS -> 4 buckets
 N_VOL_BUCKETS = 3      # matches execution_agent.VOL_BUCKETS_TICKS -> 3 buckets
 N_OFI_BUCKETS = 3      # matches execution_agent.OFI_BUCKETS -> 3 buckets
 
-STATE_DIMS = (N_DECISIONS + 1, N_INVENTORY_BUCKETS, N_SPREAD_BUCKETS, N_VOL_BUCKETS, N_OFI_BUCKETS)
+# Which observation features actually index the Q-table. The environment always COMPUTES
+# all five (they're in every observation and every log line), but only these index Q.
+#
+# WHY only time+inventory by default: the full five-feature space is
+# 11*5*4*3*3 = 1980 states x 5 actions = 9900 entries. Measured episode cost is ~460s,
+# so a realistic run is ~100-200 episodes = ~1000-2000 TD updates -- most entries would
+# never be visited even once, and the policy would come out degenerate for an
+# uninteresting reason (state space sized for a budget that doesn't exist) rather than
+# an interesting one. time x inventory = 55 states x 5 actions = 275 entries is ~7 visits
+# each: thin, but actually learnable, and it is exactly the Almgren-Chriss state
+# (time remaining, inventory remaining), so the learned policy is directly comparable to
+# the TWAP benchmark. Add features back here when the episode budget supports them.
+STATE_FEATURES = ("time", "inventory")
+
+_FEATURE_DIMS = {
+    "time": N_DECISIONS + 1,
+    "inventory": N_INVENTORY_BUCKETS,
+    "spread": N_SPREAD_BUCKETS,
+    "vol": N_VOL_BUCKETS,
+    "ofi": N_OFI_BUCKETS,
+}
+
+STATE_DIMS = tuple(_FEATURE_DIMS[f] for f in STATE_FEATURES)
 N_STATES = int(np.prod(STATE_DIMS))
 
 
+def _feature_index(obs: dict, feature: str) -> int:
+    if feature == "time":
+        idx = int(round(obs["time_remaining_frac"] * N_DECISIONS))
+    elif feature == "inventory":
+        idx = int(obs["inventory_remaining_frac"] * N_INVENTORY_BUCKETS)
+    else:
+        idx = int(obs[f"{feature}_bucket"])
+    return min(max(idx, 0), _FEATURE_DIMS[feature] - 1)
+
+
 def state_to_index(obs: dict) -> int:
-    time_idx = int(round(obs["time_remaining_frac"] * N_DECISIONS))
-    time_idx = min(max(time_idx, 0), N_DECISIONS)
-    inv_idx = min(int(obs["inventory_remaining_frac"] * N_INVENTORY_BUCKETS), N_INVENTORY_BUCKETS - 1)
-    inv_idx = max(inv_idx, 0)
-    spread_idx = min(max(int(obs["spread_bucket"]), 0), N_SPREAD_BUCKETS - 1)
-    vol_idx = min(max(int(obs["vol_bucket"]), 0), N_VOL_BUCKETS - 1)
-    ofi_idx = min(max(int(obs["ofi_bucket"]), 0), N_OFI_BUCKETS - 1)
-    return np.ravel_multi_index((time_idx, inv_idx, spread_idx, vol_idx, ofi_idx), STATE_DIMS)
+    return int(np.ravel_multi_index(
+        tuple(_feature_index(obs, f) for f in STATE_FEATURES), STATE_DIMS))
 
 
 class QLearningPolicy:
 
-    def __init__(self, alpha=0.1, alpha_decay=1.0, alpha_min=0.01,
-                 epsilon=1.0, epsilon_decay=0.995, epsilon_min=0.05,
-                 gamma=0.99, random_state=None):
+    # Defaults sized for the ~100-200 episode budget the measured ~460s/episode allows
+    # (see STATE_FEATURES above for the same reasoning applied to the state space):
+    #   alpha 0.3   -- with ~7 visits per entry, 0.1 barely moves a value off zero.
+    #   eps_decay 0.97 -- reaches the 0.05 floor by ~episode 100. At the old 0.995, epsilon
+    #                  is still 0.61 after 100 episodes, i.e. the agent would explore
+    #                  randomly for the entire run and never exploit what it learned.
+    #   gamma 1.0   -- the reward is a single terminal payment over a fixed 10-step
+    #                  horizon, so discounting it has no principled meaning here and
+    #                  undiscounted matches the implementation-shortfall definition.
+    def __init__(self, alpha=0.3, alpha_decay=1.0, alpha_min=0.01,
+                 epsilon=1.0, epsilon_decay=0.97, epsilon_min=0.05,
+                 gamma=1.0, random_state=None):
         self.q = np.zeros((N_STATES, N_ACTIONS), dtype=np.float64)
         self.alpha = alpha
         self.alpha_decay = alpha_decay

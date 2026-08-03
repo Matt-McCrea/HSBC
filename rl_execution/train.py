@@ -14,7 +14,7 @@ import numpy as np
 
 from rl_execution.env import ExecutionEnv
 from rl_execution.logging_utils import JsonlLogger, shortfall_bps as _bps
-from rl_execution.qlearning import QLearningPolicy
+from rl_execution.qlearning import N_ACTIONS, N_STATES, STATE_FEATURES, QLearningPolicy
 
 
 def train(env: ExecutionEnv, policy: QLearningPolicy, n_episodes: int, checkpoint_path: str,
@@ -78,13 +78,20 @@ if __name__ == "__main__":
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--out", default="logs/train.jsonl")
     parser.add_argument("--run-name", default="qlearning_train")
+    parser.add_argument("--alpha", type=float, default=0.3, help="Q-learning rate")
+    parser.add_argument("--epsilon-decay", type=float, default=0.97, help="per-episode epsilon decay")
+    parser.add_argument("--gamma", type=float, default=1.0, help="discount factor")
     args = parser.parse_args()
 
     if args.resume and os.path.exists(args.checkpoint):
         policy = QLearningPolicy.load(args.checkpoint, random_state=np.random.RandomState())
         print(f"resumed from {args.checkpoint}: {policy.episodes_trained} episodes already trained")
     else:
-        policy = QLearningPolicy(random_state=np.random.RandomState())
+        policy = QLearningPolicy(alpha=args.alpha, epsilon_decay=args.epsilon_decay,
+                                  gamma=args.gamma, random_state=np.random.RandomState())
+    print(f"[train] states={N_STATES} (features={STATE_FEATURES}) actions={N_ACTIONS}  "
+          f"alpha={policy.alpha} eps_decay={policy.epsilon_decay} gamma={policy.gamma}  "
+          f"side={args.side or 'random'}")
 
     env = ExecutionEnv(symbol=args.symbol, data_dir=args.data_dir, sampling_type=args.sampling_type,
                         ddim_nsteps=args.ddim_nsteps, depth_noise=args.depth_noise,
