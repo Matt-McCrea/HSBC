@@ -175,7 +175,11 @@ class ExecutionEnv:
             id=EXCHANGE_AGENT_ID, name="EXCHANGE_AGENT", type="ExchangeAgent",
             mkt_open=kernel_start, mkt_close=kernel_stop, symbols=[self.symbol],
             log_orders=False, pipeline_delay=0, computation_delay=0,
-            stream_history=2_500_000, book_freq=0, wide_book=True,
+            # book_freq=None disables the per-episode order-book log. At book_freq=0 the
+            # exchange accumulates every book change and spends ~5s per episode writing a
+            # multi-MB archive we never read -- ~15 min and a lot of disk across a
+            # 150-episode run. The RL diagnostics come from the WorldAgent instead.
+            stream_history=2_500_000, book_freq=None, wide_book=True,
             random_state=np.random.RandomState(seed=self.rng.randint(0, 2**31)))
 
         world_agent = RLWorldAgent(
@@ -197,12 +201,14 @@ class ExecutionEnv:
         coldstart.seed_exchange_book(exchange, self.symbol, cs.resting_orders, session_date,
                                       owner_agent_id=world_agent.id)
 
-        self._state_queue = queue.Queue()
-        self._action_queue = queue.Queue()
+        state_queue = queue.Queue()
+        action_queue = queue.Queue()
+        self._state_queue = state_queue
+        self._action_queue = action_queue
         exec_agent = RLExecutionAgent(
             id=EXEC_AGENT_ID, name="RL_EXECUTION_AGENT", type="ExecutionAgent", symbol=self.symbol,
             direction=side, quantity=Q, p_arrival=p_arrival, start_time=kernel_start,
-            state_queue=self._state_queue, action_queue=self._action_queue,
+            state_queue=state_queue, action_queue=action_queue,
             random_state=np.random.RandomState(seed=self.rng.randint(0, 2**31)))
         self._exec_agent = exec_agent
 
@@ -213,13 +219,16 @@ class ExecutionEnv:
             try:
                 kernel.runner(agents=[exchange, world_agent, exec_agent],
                               startTime=kernel_start, stopTime=kernel_stop,
-                              defaultComputationDelay=1, log_dir=log_dir)
+                              defaultComputationDelay=1, log_dir=log_dir,
+                              skip_log=True, run_telemetry=False)
             except Exception as e:
-                # Without this, an exception in the Kernel thread (e.g. a bug in
-                # RLWorldAgent/RLExecutionAgent) leaves reset()/step() blocked on
-                # state_queue.get() forever instead of raising -- a silent hang
-                # is much worse to debug than a traceback, especially remotely.
-                self._state_queue.put(("error", e, {}))
+                # Report onto THIS episode's queue, captured in the closure -- never
+                # self._state_queue, which by the time a straggler thread fails may
+                # already have been replaced by the next episode's queue, poisoning a
+                # healthy episode with a dead one's error (observed exactly that way).
+                # Without this the failure would instead hang reset()/step() forever on
+                # a get() that never returns, which is far worse to debug remotely.
+                state_queue.put(("error", e, {}))
 
         self._episode_info = {
             "seed_day": seed_day, "t0": t0, "side": side, "Q": Q, "p_arrival": p_arrival,
@@ -252,12 +261,22 @@ class ExecutionEnv:
         msg = self._state_queue.get()
         obs, reward, done, info = self._unpack(msg)
         if done:
-            self._kernel_thread.join(timeout=60)
+            # Diagnostics are read off the WorldAgent below, so collect them before the
+            # thread is allowed to be considered finished.
+            info.update(self._collect_world_agent_diagnostics())
+            # Wait for the episode's Kernel to fully unwind (kernelStopping /
+            # kernelTerminating / log flushing) BEFORE this episode is declared over.
+            # The agent signals "done" from inside the still-running kernel, so without a
+            # blocking join the caller starts the next reset() while the previous Kernel
+            # is still finishing -- two episodes' simulations overlapping, competing for
+            # the GPU, and interleaving their output (observed exactly that way).
+            self._kernel_thread.join(timeout=300)
+            if self._kernel_thread.is_alive():
+                print("[ExecutionEnv] WARNING: kernel thread still running 300s after episode end")
             self._episode_active = False
             info["wall_clock_reconstruct_s"] = self._reconstruct_elapsed
             info["wall_clock_simulate_s"] = _time.perf_counter() - self._simulate_start
             info["wall_clock_total_s"] = info["wall_clock_reconstruct_s"] + info["wall_clock_simulate_s"]
-            info.update(self._collect_world_agent_diagnostics())
         return obs, reward, done, info
 
     def _collect_world_agent_diagnostics(self):

@@ -54,7 +54,8 @@ class Kernel:
              num_simulations = 1, defaultComputationDelay = 1,
              defaultLatency = 1, agentLatency = None, latencyNoise = [ 1.0 ],
              agentLatencyModel = None, skip_log = False,
-             seed = None, oracle = None, log_dir = None):
+             seed = None, oracle = None, log_dir = None,
+             run_telemetry = True):
 
     # agents must be a list of agents for the simulation,
     #        based on class agent.Agent
@@ -318,14 +319,23 @@ class Kernel:
       print ("{}: {:d}".format(a, int(round(value / count))))
 
     print ("Simulation ending!")
+    # run_telemetry=False skips the end-of-run liquidity plot. It is unconditional
+    # otherwise, which is right for a one-off session but wrong for a caller that runs
+    # many short simulations back to back (the RL execution environment runs one Kernel
+    # per 5-minute episode): it would emit one PNG per episode, cost seconds each, and it
+    # hard-fails with "No objects to concatenate" whenever the exchange ran with
+    # log_orders=False, since there is then no order stream to plot. Default True keeps
+    # every existing config's behaviour byte-for-byte.
+    if not run_telemetry:
+      return self.custom_state
     stock_name = self.log_dir.split("_")[2]
     date = self.log_dir.split("_")[3]
     time = self.log_dir.split("_")[4]
     path = os.path.join(os.getcwd(), "ABIDES", "log", self.log_dir)
     liquidity_telemetry.main(
-      exchange_path=path+"/EXCHANGE_AGENT.bz2", 
-      ob_path=path+f"/ORDERBOOK_{stock_name}_FULL.bz2", 
-      outfile=path+"/world_agent_sim.png", 
+      exchange_path=path+"/EXCHANGE_AGENT.bz2",
+      ob_path=path+f"/ORDERBOOK_{stock_name}_FULL.bz2",
+      outfile=path+"/world_agent_sim.png",
       plot_config="ABIDES/util/plotting/configs/plot_09.30_12.00.json"
     )
     real_data_path = os.path.join(os.getcwd(), "ABIDES", "log", "paper", f"market_replay_{stock_name}_{date}_{time}", "processed_orders.csv")
