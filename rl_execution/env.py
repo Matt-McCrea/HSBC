@@ -188,9 +188,16 @@ class ExecutionEnv:
         log_dir = f"rl_execution_{self.symbol}_{seed_day}_{int(t0)}_{int(_time.time() * 1000) % 1_000_000}"
 
         def _run():
-            kernel.runner(agents=[exchange, world_agent, exec_agent],
-                          startTime=kernel_start, stopTime=kernel_stop,
-                          defaultComputationDelay=1, log_dir=log_dir)
+            try:
+                kernel.runner(agents=[exchange, world_agent, exec_agent],
+                              startTime=kernel_start, stopTime=kernel_stop,
+                              defaultComputationDelay=1, log_dir=log_dir)
+            except Exception as e:
+                # Without this, an exception in the Kernel thread (e.g. a bug in
+                # RLWorldAgent/RLExecutionAgent) leaves reset()/step() blocked on
+                # state_queue.get() forever instead of raising -- a silent hang
+                # is much worse to debug than a traceback, especially remotely.
+                self._state_queue.put(("error", e, {}))
 
         self._episode_info = {
             "seed_day": seed_day, "t0": t0, "side": side, "Q": Q, "p_arrival": p_arrival,
@@ -244,6 +251,9 @@ class ExecutionEnv:
 
     def _unpack(self, msg):
         kind, payload, info = msg
+        if kind == "error":
+            self._episode_active = False
+            raise RuntimeError("episode failed inside the Kernel thread") from payload
         info = {**self._episode_info, **info}
         if kind == "obs":
             return payload, 0.0, False, info

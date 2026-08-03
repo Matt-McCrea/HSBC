@@ -31,6 +31,15 @@ class RLWorldAgent(WorldAgent):
         self.placed_orders = list(seed_placed_orders)
         self.lob_snapshots = list(seed_lob_snapshots)
         self.starting_time_diffusion = "0min"
+        # WorldAgent only ever sets self.last_offset_time inside the replay loop (or when the
+        # rarely-used fix_time flag is on) -- never in __init__. Since replay never runs here,
+        # it would otherwise stay unset until the first ORDER_ACCEPTED/EXECUTED/CANCELLED
+        # message, which reads it directly (WorldAgent.py receiveMessage, ~line 395-409) and
+        # crashes with AttributeError. Analogous value: the offset of the most recent REAL
+        # order in the seeded conditioning window, matching how a normal run freezes this at
+        # "the last historical order's gap" once replay ends (see the fix_time comment in
+        # WorldAgent.wakeup for why it freezes rather than updates, in the default config).
+        self.last_offset_time = float(self.placed_orders[-1][0])
 
     def wakeup(self, currentTime):
         self.currentTime = currentTime
