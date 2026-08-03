@@ -164,6 +164,139 @@ def normalize_messages(data, mean_size=None, mean_prices=None, std_size=None,  s
     return data, mean_size, mean_prices, std_size,  std_prices, mean_time, std_time, mean_depth, std_depth
 
 
+def z_score_orderbook_for_cond(orderbook, normalization_terms, price_anchor=0.0,
+                                fix_lob_pad=False, cond_clip=0.0):
+    """Z-score a raw LOB snapshot array for model conditioning.
+
+    Extracted from WorldAgent._z_score_orderbook (ABIDES/agent/WorldAgent.py) so
+    the exact same conditioning logic is shared between live simulation and the
+    RL cold-start module (rl_execution/coldstart.py) -- must not diverge, see
+    the cond_z diagnostic drift warning in the RL execution project spec.
+
+    orderbook: np.ndarray, one row per LOB snapshot, columns
+        [sell1, vsell1, buy1, vbuy1, sell2, vsell2, ...] in raw LOBSTER units.
+        Mutated in place (matches the original method's behavior).
+    normalization_terms: dict with "lob" -> (mean_size, std_size, mean_price, std_price).
+    price_anchor: day's opening mid, in raw price units; applied only if nonzero
+        (callers gate this on cst.PRICE_REANCHOR, same as the original method).
+    fix_lob_pad: H5 sentinel-padding convention, see original method.
+    cond_clip: clip z-scored sizes to [-cond_clip, cond_clip]; 0 = off.
+
+    Returns (orderbook, clipped_count) -- clipped_count is how many size entries
+    were clipped, for callers that want to accumulate a running diagnostic
+    (WorldAgent accumulates this into self.cond_clipped_count).
+    """
+    if fix_lob_pad:
+        ask_prices = orderbook[:, 0::4]
+        ask_prices[ask_prices == 0] = 9999999999
+        bid_prices = orderbook[:, 2::4]
+        bid_prices[bid_prices == 0] = -9999999999
+    if price_anchor:
+        prices = orderbook[:, 0::2]
+        _real_quote = (np.abs(prices) > 0) & (np.abs(prices) < 9_000_000_000)
+        prices[_real_quote] -= price_anchor
+    orderbook[:, 0::2] = orderbook[:, 0::2] / 100
+    orderbook[:, 0::2] = (orderbook[:, 0::2] - normalization_terms["lob"][2]) / normalization_terms["lob"][3]
+    orderbook[:, 1::2] = (orderbook[:, 1::2] - normalization_terms["lob"][0]) / normalization_terms["lob"][1]
+    clipped_count = 0
+    if cond_clip > 0.0:
+        sizes = orderbook[:, 1::2]
+        clipped_count = int(np.count_nonzero(np.abs(sizes) > cond_clip))
+        np.clip(sizes, -cond_clip, cond_clip, out=sizes)
+    return orderbook, clipped_count
+
+
+def preprocess_orders_for_diff_cond(orders, lob_snapshots, normalization_terms,
+                                     price_anchor=0.0, cond_stats=None):
+    """Build the z-scored order-history conditioning tensor for the diffusion model.
+
+    Extracted from WorldAgent._preprocess_orders_for_diff_cond (see
+    z_score_orderbook_for_cond's docstring above for why this is shared rather
+    than reimplemented independently in the RL cold-start module).
+
+    orders: np.ndarray [n, 6], columns (time, event_type, order_id, size, price, direction).
+    lob_snapshots: np.ndarray [n+1, 40] -- one leading pre-event row, so row j is
+        always the LOB state immediately BEFORE orders[j] (see the depth-computation
+        comment below for why this indexing matters).
+    normalization_terms: dict with "event" -> (mean_size, std_size, mean_price,
+        std_price, mean_time, std_time, mean_depth, std_depth).
+    price_anchor: day's opening mid, in raw price units; applied only if nonzero.
+    cond_stats: optional dict, mutated in place, accumulating running
+        [min, max, sum, count] per z-scored channel (time/size/price/depth) --
+        the cond_z diagnostic. Pass a fresh {} to get just this call's stats
+        (e.g. at cold-start seed time), or a persistent dict to accumulate
+        across an episode/run (as WorldAgent does with self.cond_stats).
+
+    Returns a torch.FloatTensor on cst.DEVICE, columns (time, event_type, size,
+    price, direction, depth) -- order_id is dropped.
+    """
+    columns = ["time", "event_type", "order_id", "size", "price", "direction"]
+    orderbook_columns = [c for i in range(1, 11) for c in
+                         (f"sell{i}", f"vsell{i}", f"buy{i}", f"vbuy{i}")]
+    orders_dataframe = pd.DataFrame(orders, columns=columns)
+    lob_dataframe = pd.DataFrame(lob_snapshots, columns=orderbook_columns)
+
+    # compute the depth of each order with respect to the orderbook
+    orders_dataframe["depth"] = 0
+    for j in range(0, orders_dataframe.shape[0]):
+        order_price = orders_dataframe["price"].iloc[j]
+        direction = orders_dataframe["direction"].iloc[j]
+        # ALWAYS the pre-event snapshot (lob_dataframe carries one leading row, so
+        # index=j is "before orders[j]").
+        index = j
+        if direction == 1:
+            bid_side = lob_dataframe.iloc[index, 2::4]
+            bid_price = bid_side[0]
+            depth = (bid_price - order_price) // 100
+            if depth < 0 and not cst.UNCLAMP_DEPTH:  # match training: keep signed depth iff unclamped
+                depth = 0
+        else:
+            ask_side = lob_dataframe.iloc[index, 0::4]
+            ask_price = ask_side[0]
+            depth = (order_price - ask_price) // 100
+            if depth < 0 and not cst.UNCLAMP_DEPTH:
+                depth = 0
+        orders_dataframe.loc[j, "depth"] = depth
+
+    # if order type is 4, then we transform the execution of a sell limit order into a buy market order
+    orders_dataframe["direction"] = orders_dataframe["direction"] * orders_dataframe["event_type"].apply(
+        lambda x: -1 if x == 4 else 1)
+
+    orders_dataframe = orders_dataframe.drop(columns=["order_id"])
+
+    # PRICE_REANCHOR: applied after the depth loop above (depth is difference-based) --
+    # mirrors preprocess_data's insertion point exactly.
+    if price_anchor:
+        orders_dataframe["price"] = orders_dataframe["price"] - price_anchor
+
+    orders_dataframe["price"] = orders_dataframe["price"] / 100
+
+    orders_dataframe, _, _, _, _, _, _, _, _ = normalize_messages(
+        orders_dataframe,
+        mean_size=normalization_terms["event"][0],
+        mean_prices=normalization_terms["event"][2],
+        std_size=normalization_terms["event"][1],
+        std_prices=normalization_terms["event"][3],
+        mean_time=normalization_terms["event"][4],
+        std_time=normalization_terms["event"][5],
+        mean_depth=normalization_terms["event"][6],
+        std_depth=normalization_terms["event"][7],
+    )
+
+    if cond_stats is not None:
+        for col in ("time", "size", "price", "depth"):
+            if col in orders_dataframe.columns:
+                v = orders_dataframe[col].to_numpy(dtype=float)
+                if len(v):
+                    s = cond_stats.setdefault(col, [float("inf"), float("-inf"), 0.0, 0])
+                    s[0] = min(s[0], float(v.min()))
+                    s[1] = max(s[1], float(v.max()))
+                    s[2] += float(v.sum())
+                    s[3] += len(v)
+
+    return torch.from_numpy(orders_dataframe.to_numpy()).to(cst.DEVICE, torch.float32)
+
+
 def load_compute_normalization_terms(stock_name, data_dir, model, n_lob_levels):
     """Return normalization stats for WorldAgent/simulation.
 

@@ -19,7 +19,8 @@ import pandas as pd
 import datetime
 
 from ABIDES.util.order.MarketOrder import MarketOrder
-from utils.utils_data import reset_indexes, normalize_messages, one_hot_encoding_type, to_sparse_representation, tanh_encoding_type
+from utils.utils_data import (reset_indexes, normalize_messages, one_hot_encoding_type, to_sparse_representation,
+                               tanh_encoding_type, z_score_orderbook_for_cond, preprocess_orders_for_diff_cond)
 import constants as cst
 
 class WorldAgent(Agent):
@@ -1038,115 +1039,24 @@ class WorldAgent(Agent):
 
 
     def _z_score_orderbook(self, orderbook):
-        if self.fix_lob_pad:
-            # H5: training data keeps LOBSTER sentinel prices (+/-9999999999) for missing
-            # levels; the sim pads them with 0, which z-scores to a completely different
-            # value. Restore the training convention before normalization. Operates on the
-            # fresh np.array copy made at the call site, never the stored snapshots
-            # (price-reconstruction code relies on `== 0` checks there).
-            ask_prices = orderbook[:, 0::4]
-            ask_prices[ask_prices == 0] = 9999999999
-            bid_prices = orderbook[:, 2::4]
-            bid_prices[bid_prices == 0] = -9999999999
-        if cst.PRICE_REANCHOR and self.price_anchor:
-            # anchor only real quotes: zero-padded missing levels keep their existing (already
-            # OOD-extreme) convention, matching how training skips sentinel prices.
-            prices = orderbook[:, 0::2]
-            _real_quote = (np.abs(prices) > 0) & (np.abs(prices) < 9_000_000_000)
-            prices[_real_quote] -= self.price_anchor
-        orderbook[:, 0::2] = orderbook[:, 0::2] / 100
-        orderbook[:, 0::2] = (orderbook[:, 0::2] - self.normalization_terms["lob"][2]) / self.normalization_terms["lob"][3]
-        orderbook[:, 1::2] = (orderbook[:, 1::2] - self.normalization_terms["lob"][0]) / self.normalization_terms["lob"][1]
-        if self.cond_clip > 0.0:
-            # --cond-clip: keep the fed-back book SIZE conditioning inside training support, capping the
-            # runaway touch sizes that drive the long-horizon divergence. Sizes only: prices are handled
-            # by PRICE_REANCHOR, and missing-level size padding (z ~ -mean/std) is well inside [-C, C].
-            sizes = orderbook[:, 1::2]
-            self.cond_clipped_count += int(np.count_nonzero(np.abs(sizes) > self.cond_clip))
-            np.clip(sizes, -self.cond_clip, self.cond_clip, out=sizes)
+        # See utils/utils_data.py:z_score_orderbook_for_cond -- extracted so the RL
+        # cold-start module (rl_execution/coldstart.py) shares the exact same logic.
+        anchor = self.price_anchor if cst.PRICE_REANCHOR else 0.0
+        orderbook, clipped = z_score_orderbook_for_cond(
+            orderbook, self.normalization_terms, price_anchor=anchor,
+            fix_lob_pad=self.fix_lob_pad, cond_clip=self.cond_clip)
+        self.cond_clipped_count += clipped
         return orderbook
 
 
     def _preprocess_orders_for_diff_cond(self, orders, lob_snapshots):
-        COLUMNS_NAMES = {"orderbook": ["sell1", "vsell1", "buy1", "vbuy1",
-                                       "sell2", "vsell2", "buy2", "vbuy2",
-                                       "sell3", "vsell3", "buy3", "vbuy3",
-                                       "sell4", "vsell4", "buy4", "vbuy4",
-                                       "sell5", "vsell5", "buy5", "vbuy5",
-                                       "sell6", "vsell6", "buy6", "vbuy6",
-                                       "sell7", "vsell7", "buy7", "vbuy7",
-                                       "sell8", "vsell8", "buy8", "vbuy8",
-                                       "sell9", "vsell9", "buy9", "vbuy9",
-                                       "sell10", "vsell10", "buy10", "vbuy10"],
-                         "message": ["time", "event_type", "order_id", "size", "price", "direction"]}
-        orders_dataframe = pd.DataFrame(orders, columns=COLUMNS_NAMES["message"])
-        lob_dataframe = pd.DataFrame(lob_snapshots, columns=COLUMNS_NAMES["orderbook"])
-
-        # we compute the depth of the orders with respect to the orderbook
-        orders_dataframe["depth"] = 0
-        for j in range(0, orders_dataframe.shape[0]):
-            order_price = orders_dataframe["price"].iloc[j]
-            direction = orders_dataframe["direction"].iloc[j]
-            type = orders_dataframe["event_type"].iloc[j]
-            # ALWAYS the pre-event snapshot (lob_dataframe carries one leading row, so index=j is
-            # "before orders[j]"). index=j+1 for type==1 was the post-event snapshot — self-referential
-            # for a marketable order resting its own remainder (see utils_data.py's matching fix and
-            # scripts/check_raw_depth_distribution.py).
-            index = j
-            if direction == 1:
-                bid_side = lob_dataframe.iloc[index, 2::4]
-                bid_price = bid_side[0]
-                depth = (bid_price - order_price) // 100
-                if depth < 0 and not cst.UNCLAMP_DEPTH:   # match training: keep signed depth iff unclamped
-                    depth = 0
-            else:
-                ask_side = lob_dataframe.iloc[index, 0::4]
-                ask_price = ask_side[0]
-                depth = (order_price - ask_price) // 100
-                if depth < 0 and not cst.UNCLAMP_DEPTH:
-                    depth = 0
-            orders_dataframe.loc[j, "depth"] = depth
-
-        # if order type is 4, then we transform the execution of a sell limit order in a buy market order
-        orders_dataframe["direction"] = orders_dataframe["direction"] * orders_dataframe["event_type"].apply(
-            lambda x: -1 if x == 4 else 1)
-
-        # drop the order_id column
-        orders_dataframe = orders_dataframe.drop(columns=["order_id"])
-
-        # PRICE_REANCHOR: applied after the depth loop above (depth is difference-based) —
-        # mirrors preprocess_data's insertion point exactly.
-        if cst.PRICE_REANCHOR and self.price_anchor:
-            orders_dataframe["price"] = orders_dataframe["price"] - self.price_anchor
-
-        # divide all the price, both of lob and messages, by 100
-        orders_dataframe["price"] = orders_dataframe["price"] / 100
-
-        # apply z score to orders
-        orders_dataframe, _, _, _, _, _, _, _, _ = normalize_messages(orders_dataframe,
-                                                                    mean_size=self.normalization_terms["event"][0],
-                                                                    mean_prices=self.normalization_terms["event"][2],
-                                                                    std_size=self.normalization_terms["event"][1],
-                                                                    std_prices=self.normalization_terms["event"][3],
-                                                                    mean_time=self.normalization_terms["event"][4],
-                                                                    std_time=self.normalization_terms["event"][5],
-                                                                    mean_depth=self.normalization_terms["event"][6],
-                                                                    std_depth=self.normalization_terms["event"][7]
-                                                                    )
-
-        # Diagnostics: running min/mean/max of the z-scored conditioning channels, so
-        # OOD conditioning is visible in the end-of-run report without extra tooling.
-        for col in ("time", "size", "price", "depth"):
-            if col in orders_dataframe.columns:
-                v = orders_dataframe[col].to_numpy(dtype=float)
-                if len(v):
-                    s = self.cond_stats.setdefault(col, [float("inf"), float("-inf"), 0.0, 0])
-                    s[0] = min(s[0], float(v.min()))
-                    s[1] = max(s[1], float(v.max()))
-                    s[2] += float(v.sum())
-                    s[3] += len(v)
-
-        return torch.from_numpy(orders_dataframe.to_numpy()).to(cst.DEVICE, torch.float32)
+        # See utils/utils_data.py:preprocess_orders_for_diff_cond -- extracted so the RL
+        # cold-start module (rl_execution/coldstart.py) shares the exact same logic
+        # (must not diverge, see the cond_z diagnostic drift warning in the spec).
+        anchor = self.price_anchor if cst.PRICE_REANCHOR else 0.0
+        return preprocess_orders_for_diff_cond(
+            orders, lob_snapshots, self.normalization_terms,
+            price_anchor=anchor, cond_stats=self.cond_stats)
 
 
     def _load_orders_lob(self, symbol, data_dir, date, date_trading_days):

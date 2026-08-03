@@ -1,6 +1,11 @@
 # Data ? never commit (large, machine-specific)
 data/
 
+# RL execution run artifacts (logs, Q-table checkpoints -- machine-specific, regenerable)
+rl_execution_logs/
+logs/
+checkpoints/
+
 # file-based feature flags (transient local state, not code)
 UNCLAMP_DEPTH_FLAG
 PRICE_REANCHOR_FLAG

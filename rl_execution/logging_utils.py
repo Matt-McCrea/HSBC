@@ -1,0 +1,57 @@
+"""Shared JSON-lines logging schema for benchmark/train/eval scripts (deliverable 7).
+
+One JSON object per line, one line per episode, so the Results chapter can be
+written directly from saved logs without rerunning anything (per the spec).
+Every field that's cheap to capture is captured -- better to have an unused
+column than to need a rerun to add one later.
+"""
+
+import json
+import os
+import time
+
+
+EPISODE_LOG_FIELDS = (
+    "run_name", "timestamp", "seed_day", "t0", "side", "Q", "sampling_type",
+    "depth_noise", "policy_name", "wall_clock_total_s", "wall_clock_reconstruct_s",
+    "wall_clock_simulate_s", "p_arrival", "shortfall", "reward", "n_resting_orders",
+    "n_steps", "fills", "cond_z", "flow_mix", "execution_rate", "unique_mid_count",
+    "error",
+)
+
+
+class JsonlLogger:
+    """Append-only JSON-lines writer. One instance per run (benchmark run,
+    training run, or eval run); one line written per episode via log_episode().
+    """
+
+    def __init__(self, path):
+        self.path = path
+        os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+
+    def log_episode(self, **fields):
+        unknown = set(fields) - set(EPISODE_LOG_FIELDS)
+        if unknown:
+            raise ValueError(f"unknown log field(s): {unknown} -- add to EPISODE_LOG_FIELDS if intentional")
+        record = {k: fields.get(k) for k in EPISODE_LOG_FIELDS}
+        record["timestamp"] = record["timestamp"] or time.time()
+        with open(self.path, "a") as f:
+            f.write(json.dumps(record, default=_json_default) + "\n")
+        return record
+
+
+def _json_default(o):
+    if hasattr(o, "tolist"):  # numpy scalars/arrays
+        return o.tolist()
+    return str(o)
+
+
+def read_episodes(path):
+    """Read a JSON-lines log file back into a list of dicts."""
+    records = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+    return records
