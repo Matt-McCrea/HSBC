@@ -109,11 +109,17 @@ class ExecutionEnv:
         self.data_dir = data_dir
         self.depth_noise = depth_noise
         self.sampling_type = sampling_type
+        self.ddim_nsteps = ddim_nsteps
         self.Q_range = Q_range
         self.rng = random_state or np.random.RandomState()
 
         self.model, self.config, self.checkpoint_path = load_model(
             symbol, sampling_type=sampling_type, ddim_nsteps=ddim_nsteps, checkpoint_path=checkpoint_path)
+        # Self-documenting run banner: which checkpoint and sampler produced a given set of
+        # numbers is exactly what the Results chapter has to state, and the checkpoint was
+        # previously auto-selected and never recorded anywhere.
+        print(f"[ExecutionEnv] checkpoint={self.checkpoint_path}")
+        print(f"[ExecutionEnv] sampler={sampling_type} ddim_nsteps={ddim_nsteps} depth_noise={depth_noise}")
         self.normalization_terms = load_compute_normalization_terms(
             symbol, data_dir, cst.Models.TRADES, n_lob_levels=10)
         self.cond_seq_size = (self.config.HYPER_PARAMETERS[cst.LearningHyperParameter.SEQ_SIZE]
@@ -218,6 +224,7 @@ class ExecutionEnv:
         self._episode_info = {
             "seed_day": seed_day, "t0": t0, "side": side, "Q": Q, "p_arrival": p_arrival,
             "sampling_type": self.sampling_type, "depth_noise": self.depth_noise,
+            "ddim_nsteps": self.ddim_nsteps, "checkpoint": str(self.checkpoint_path),
             "cond_stats": cs.cond_stats, "n_resting_orders": len(cs.resting_orders),
         }
         self._episode_active = True

@@ -13,18 +13,19 @@ import time
 import numpy as np
 
 from rl_execution.env import ExecutionEnv
-from rl_execution.logging_utils import JsonlLogger
+from rl_execution.logging_utils import JsonlLogger, shortfall_bps as _bps
 from rl_execution.qlearning import QLearningPolicy
 
 
 def train(env: ExecutionEnv, policy: QLearningPolicy, n_episodes: int, checkpoint_path: str,
-          checkpoint_every: int = 25, run_name="qlearning_train", out_path="logs/train.jsonl"):
+          checkpoint_every: int = 25, run_name="qlearning_train", out_path="logs/train.jsonl",
+          side=None):
     logger = JsonlLogger(out_path)
     start_episode = policy.episodes_trained
 
     for ep in range(start_episode, start_episode + n_episodes):
         ep_start = time.perf_counter()
-        obs, info = env.reset()
+        obs, info = env.reset(side=side)
         done = False
         while not done:
             action = policy.select_action(obs)
@@ -37,10 +38,12 @@ def train(env: ExecutionEnv, policy: QLearningPolicy, n_episodes: int, checkpoin
         logger.log_episode(
             run_name=run_name, seed_day=info["seed_day"], t0=info["t0"], side=info["side"],
             Q=info["Q"], sampling_type=info["sampling_type"], depth_noise=info["depth_noise"],
+            ddim_nsteps=info["ddim_nsteps"], checkpoint=info["checkpoint"],
             policy_name=f"qlearning_eps{policy.epsilon:.3f}", wall_clock_total_s=info["wall_clock_total_s"],
             wall_clock_reconstruct_s=info["wall_clock_reconstruct_s"],
             wall_clock_simulate_s=info["wall_clock_simulate_s"], p_arrival=info["p_arrival"],
-            shortfall=info["shortfall"], reward=reward, n_resting_orders=info["n_resting_orders"],
+            shortfall=info["shortfall"], shortfall_bps=_bps(info), reward=reward,
+            n_resting_orders=info["n_resting_orders"],
             fills=info["fills"], cond_z=info["cond_stats"], flow_mix=info["flow_mix"],
             execution_rate=info["execution_rate"], unique_mid_count=info["unique_mid_count"],
         )
@@ -65,7 +68,12 @@ if __name__ == "__main__":
     parser.add_argument("--sampling-type", default="DDIM")
     parser.add_argument("--ddim-nsteps", type=int, default=10)
     parser.add_argument("--depth-noise", type=float, default=0.3)
-    parser.add_argument("--checkpoint", default="checkpoints/qtable.npz")
+    parser.add_argument("--ckpt-path", default=None,
+                        help="exact TRADES checkpoint to simulate with; default = lowest val-loss for the symbol")
+    parser.add_argument("--side", default=None, choices=["BUY", "SELL"],
+                        help="fix the parent-order side; default = randomised per episode")
+    parser.add_argument("--checkpoint", default="checkpoints/qtable.npz",
+                        help="where to save/resume the Q-table (not the TRADES checkpoint -- see --ckpt-path)")
     parser.add_argument("--checkpoint-every", type=int, default=25)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--out", default="logs/train.jsonl")
@@ -79,6 +87,7 @@ if __name__ == "__main__":
         policy = QLearningPolicy(random_state=np.random.RandomState())
 
     env = ExecutionEnv(symbol=args.symbol, data_dir=args.data_dir, sampling_type=args.sampling_type,
-                        ddim_nsteps=args.ddim_nsteps, depth_noise=args.depth_noise)
+                        ddim_nsteps=args.ddim_nsteps, depth_noise=args.depth_noise,
+                        checkpoint_path=args.ckpt_path)
     train(env, policy, args.n_episodes, args.checkpoint, checkpoint_every=args.checkpoint_every,
-          run_name=args.run_name, out_path=args.out)
+          run_name=args.run_name, out_path=args.out, side=args.side)

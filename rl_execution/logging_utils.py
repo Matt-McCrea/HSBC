@@ -13,10 +13,10 @@ import time
 
 EPISODE_LOG_FIELDS = (
     "run_name", "timestamp", "seed_day", "t0", "side", "Q", "sampling_type",
-    "depth_noise", "policy_name", "wall_clock_total_s", "wall_clock_reconstruct_s",
-    "wall_clock_simulate_s", "p_arrival", "shortfall", "reward", "n_resting_orders",
-    "n_steps", "fills", "cond_z", "flow_mix", "execution_rate", "unique_mid_count",
-    "error",
+    "depth_noise", "ddim_nsteps", "checkpoint", "policy_name", "wall_clock_total_s",
+    "wall_clock_reconstruct_s", "wall_clock_simulate_s", "p_arrival", "shortfall",
+    "shortfall_bps", "reward", "n_resting_orders", "n_steps", "fills", "cond_z",
+    "flow_mix", "execution_rate", "unique_mid_count", "error",
 )
 
 
@@ -38,6 +38,18 @@ class JsonlLogger:
         with open(self.path, "a") as f:
             f.write(json.dumps(record, default=_json_default) + "\n")
         return record
+
+
+def shortfall_bps(info):
+    """Implementation shortfall in basis points of the arrival mid -- the unit the
+    execution literature reports, and unit-free (raw shortfall is in LOBSTER price
+    ticks, i.e. $1e-4, which is meaningless without p_arrival alongside it).
+    """
+    shortfall = info.get("shortfall")
+    p_arrival = info.get("p_arrival")
+    if shortfall is None or not p_arrival:
+        return None
+    return float(shortfall) / float(p_arrival) * 10_000.0
 
 
 def _json_default(o):
