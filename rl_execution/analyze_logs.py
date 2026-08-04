@@ -23,13 +23,46 @@ import pandas as pd
 from rl_execution.logging_utils import read_episodes
 
 
+RUN_GAP_SECONDS = 1800.0  # a gap this large between consecutive rows implies a separate run
+
+
 def load(path) -> pd.DataFrame:
     df = pd.DataFrame(read_episodes(path))
     if "shortfall_bps" not in df.columns or df["shortfall_bps"].isna().all():
         # older logs predate the bps field; derive it (both inputs are logged)
         df["shortfall_bps"] = df["shortfall"] / df["p_arrival"] * 10_000.0
-    df["episode"] = np.arange(1, len(df) + 1)
+    df["run_id"] = _assign_runs(df)
+    # Episode numbers restart per run, matching what the training loop printed. Numbering
+    # straight through the file is wrong whenever a filename was reused across runs, and
+    # silently points every "episode N" lookup at the wrong row.
+    df["episode"] = df.groupby("run_id").cumcount() + 1
+    df["row"] = np.arange(1, len(df) + 1)
     return df
+
+
+def _assign_runs(df: pd.DataFrame) -> pd.Series:
+    if "run_id" in df.columns and df["run_id"].notna().all():
+        return df["run_id"]
+    # Logs written before run_id existed: fall back to splitting on large time gaps.
+    ts = pd.to_numeric(df.get("timestamp"), errors="coerce")
+    if ts.isna().all():
+        return pd.Series(["run1"] * len(df), index=df.index)
+    boundary = ts.diff().fillna(0) > RUN_GAP_SECONDS
+    inferred = "inferred" + (boundary.cumsum() + 1).astype(str)
+    if "run_id" in df.columns:
+        return df["run_id"].fillna(pd.Series(inferred, index=df.index))
+    return pd.Series(inferred, index=df.index)
+
+
+def decode_cond_z(rec) -> dict:
+    """cond_z is stored as the WorldAgent's raw accumulator [min, max, sum, count]
+    per channel; report it as the min/mean/max the DIAG lines print."""
+    out = {}
+    for chan, v in (rec or {}).items():
+        if isinstance(v, (list, tuple)) and len(v) == 4:
+            lo, hi, total, n = v
+            out[chan] = {"min": lo, "mean": (total / n if n else float("nan")), "max": hi, "n": n}
+    return out
 
 
 def _robust_stats(x: pd.Series) -> dict:
@@ -66,7 +99,14 @@ def _fmt(stats: dict, label: str) -> str:
 
 def summarize(df: pd.DataFrame, by=None):
     print("=" * 100)
-    print(f"{len(df)} episodes")
+    print(f"{len(df)} rows in file")
+    runs = df.groupby("run_id", sort=False)
+    if len(runs) > 1:
+        print(f"WARNING: {len(runs)} separate runs share this file (append-only log, reused filename).")
+        print("         Episode numbers below restart per run, matching the training loop's output.")
+        print("         Use --run <id> to analyse one, or --last-run for the most recent.")
+        for rid, grp in runs:
+            print(f"           {rid}: {len(grp)} episodes (file rows {grp['row'].min()}-{grp['row'].max()})")
     print("=" * 100)
 
     print("\nSHORTFALL (bps of arrival mid; negative = better than arrival)")
@@ -107,7 +147,7 @@ def _outliers(df: pd.DataFrame, k=3.0):
     if out.empty:
         print("  none")
         return
-    cols = [c for c in ("episode", "shortfall_bps", "seed_day", "t0", "side", "Q",
+    cols = [c for c in ("episode", "row", "shortfall_bps", "seed_day", "t0", "side", "Q",
                         "execution_rate", "unique_mid_count", "n_resting_orders") if c in out.columns]
     with pd.option_context("display.width", 200, "display.max_columns", 20):
         print(out[cols].to_string(index=False))
@@ -139,9 +179,19 @@ if __name__ == "__main__":
     parser.add_argument("log", help="path to a .jsonl run log")
     parser.add_argument("--episode", type=int, default=None, help="dump one episode in full")
     parser.add_argument("--by", default=None, help="group shortfall stats by a column, e.g. policy_name")
+    parser.add_argument("--run", default=None, help="analyse only this run_id (see the warning header)")
+    parser.add_argument("--last-run", action="store_true", help="analyse only the most recent run in the file")
     args = parser.parse_args()
 
     df = load(args.log)
+    if args.run:
+        df = df[df["run_id"] == args.run]
+        if df.empty:
+            raise SystemExit(f"no rows with run_id={args.run}")
+    elif args.last_run:
+        last = df["run_id"].iloc[-1]
+        df = df[df["run_id"] == last]
+        print(f"(showing only the most recent run: {last}, {len(df)} episodes)\n")
     if args.episode is not None:
         show_episode(df, args.episode)
     else:

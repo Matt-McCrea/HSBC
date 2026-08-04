@@ -33,9 +33,24 @@ from utils.utils_data import load_compute_normalization_terms
 
 from rl_execution import coldstart
 from rl_execution.execution_agent import N_DECISIONS, RLExecutionAgent
+from rl_execution.orderbook_reconstructor import DEFAULT_MARKET_OPEN
 from rl_execution.rl_world_agent import RLWorldAgent
 
 EPISODE_SECONDS = N_DECISIONS * 30  # 5 minutes, fixed by the spec
+
+# Earliest seed timestamp, as seconds after the 09:30 open. Requiring only enough
+# CONDITIONING history (256 messages) is not enough: on a liquid day those elapse within
+# seconds of the open, so t0 could land at ~09:32 when the real book still holds only a few
+# hundred resting orders against a typical 3-4k. Seeded that thin, generation destabilises
+# and the price runs away -- one observed episode moved the mid ~17% in 5 simulated minutes
+# and produced a -1350bps shortfall, ~100x any other episode, purely from the thin start.
+# 30 minutes also matches the rest of the project's convention of leaving the opening
+# auction period alone (the standard pipeline replays 15 min from 09:30 before generating).
+MIN_SECONDS_AFTER_OPEN = 1800.0
+
+# Below this many reconstructed resting orders the seeded book is unrepresentatively thin;
+# warn rather than reject, so a genuine mid-session collapse stays visible in the logs.
+THIN_BOOK_WARNING = 1000
 
 # Agent ids within an episode's Kernel. The exchange must be 0 (TradingAgent.kernelStarting
 # finds it by type, but WorldAgent._update_active_limit_orders hardcodes agents[0]).
@@ -104,9 +119,10 @@ class ExecutionEnv:
 
     def __init__(self, symbol="INTC", data_dir="data", sampling_type="DDIM", ddim_nsteps=10,
                  depth_noise=0.3, checkpoint_path=None, seed_days=None, Q_range=(1000, 5000),
-                 random_state=None):
+                 random_state=None, min_seconds_after_open=MIN_SECONDS_AFTER_OPEN):
         self.symbol = symbol
         self.data_dir = data_dir
+        self.min_seconds_after_open = min_seconds_after_open
         self.depth_noise = depth_noise
         self.sampling_type = sampling_type
         self.ddim_nsteps = ddim_nsteps
@@ -147,10 +163,15 @@ class ExecutionEnv:
         messages, orderbook = coldstart.read_day(message_path, orderbook_path)
 
         if t0 is None:
-            # any timestamp with enough preceding real history and at least EPISODE_SECONDS
-            # of trading day remaining, varying across the session per the spec.
-            lo = float(messages["time"].iloc[self.seq_len + 10])
+            # Enough preceding real history for the conditioning window, far enough past the
+            # open for the book to be representative (see MIN_SECONDS_AFTER_OPEN), and at
+            # least EPISODE_SECONDS of trading day left -- varying across the session per
+            # the spec.
+            lo = max(float(messages["time"].iloc[self.seq_len + 10]),
+                     DEFAULT_MARKET_OPEN + self.min_seconds_after_open)
             hi = float(messages["time"].iloc[-1]) - EPISODE_SECONDS - 5
+            if lo >= hi:
+                raise ValueError(f"{seed_day}: no valid seed window (lo={lo} >= hi={hi})")
             t0 = float(self.rng.uniform(lo, hi))
         side = str(side) if side else str(self.rng.choice(["BUY", "SELL"]))
         Q = Q or int(self.rng.randint(self.Q_range[0], self.Q_range[1]))
@@ -162,6 +183,10 @@ class ExecutionEnv:
             messages=messages, orderbook=orderbook)  # reuse the frames already read above
         self._reconstruct_elapsed = _time.perf_counter() - reconstruct_start
         p_arrival = float((cs.lob_raw[-1, 0] + cs.lob_raw[-1, 2]) / 2.0)
+        if len(cs.resting_orders) < THIN_BOOK_WARNING:
+            print(f"[ExecutionEnv] WARNING: thin seeded book -- only {len(cs.resting_orders)} resting "
+                  f"orders at t0={t0:.0f} on {seed_day}. Generation is prone to price runaway from a "
+                  f"thin start; treat this episode's shortfall with suspicion (n_resting_orders is logged).")
 
         session_date = pd.Timestamp(seed_day)
         kernel_start = session_date + pd.Timedelta(seconds=t0)

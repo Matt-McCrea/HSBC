@@ -19,15 +19,22 @@ import numpy as np
 
 from rl_execution import coldstart, env as env_module
 from rl_execution.env import ExecutionEnv
+from rl_execution.orderbook_reconstructor import DEFAULT_MARKET_OPEN
 from rl_execution.logging_utils import JsonlLogger, shortfall_bps as _bps
 from rl_execution.qlearning import QLearningPolicy, TWAPPolicy
 
 
 def generate_held_out_seeds(data_dir, symbol, n_seeds, seq_len=256, episode_seconds=300,
-                             Q_range=(1000, 5000), seed=123, seed_days=None):
+                             Q_range=(1000, 5000), seed=123, seed_days=None,
+                             min_seconds_after_open=env_module.MIN_SECONDS_AFTER_OPEN):
     """A fixed list of (seed_day, t0, side, Q) tuples, generated once with a
     dedicated RandomState so the SAME held-out set is reused across every
     policy/sampler combination compared -- required for a fair comparison.
+
+    Applies the same MIN_SECONDS_AFTER_OPEN floor as ExecutionEnv.reset (see the
+    constant's comment in env.py): a t0 in the opening minutes seeds an
+    unrepresentatively thin book and can produce a ~100x outlier that would
+    dominate the mean and standard error of the whole comparison.
     """
     rng = np.random.RandomState(seed)
     seed_days = seed_days or env_module.list_trading_days(data_dir, symbol)
@@ -36,7 +43,8 @@ def generate_held_out_seeds(data_dir, symbol, n_seeds, seq_len=256, episode_seco
         day = str(rng.choice(seed_days))
         message_path, orderbook_path = coldstart._day_paths(data_dir, symbol, day)
         messages, _ = coldstart.read_day(message_path, orderbook_path)
-        lo = float(messages["time"].iloc[seq_len + 10])
+        lo = max(float(messages["time"].iloc[seq_len + 10]),
+                 DEFAULT_MARKET_OPEN + min_seconds_after_open)
         hi = float(messages["time"].iloc[-1]) - episode_seconds - 5
         t0 = float(rng.uniform(lo, hi))
         side = str(rng.choice(["BUY", "SELL"]))
