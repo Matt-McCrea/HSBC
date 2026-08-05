@@ -171,14 +171,20 @@ def main(real_path, gen_path, out_path, real_label="Real", gen_label="TRADES"):
     axes[4].set_ylabel("Autocorrelation")
     axes[4].legend()
 
-    # 6. Mid-price trace
+    # 6. Mid-price trace — trim every series to the SAME actual time window (the shortest
+    # series' length) before plotting, so the x-axis represents identical real minutes for
+    # both rather than each series' own full span. The real reference file often covers more
+    # wall-clock time than the generated session; plotting each against its own raw index
+    # made the shorter one look like it "ran out" partway across the plot, when really the
+    # two were just never aligned to the same time window in the first place.
+    common_len = min(len(df) for _, df in datasets)
     for label, df in datasets:
-        trace = df["mid"].reset_index(drop=True)
+        trace = df["mid"].reset_index(drop=True).iloc[:common_len]
         if len(trace) > 5000:
             trace = trace.iloc[np.linspace(0, len(trace)-1, 5000).astype(int)]
         axes[5].plot(np.arange(len(trace)), trace, linewidth=1, label=label)
     axes[5].set_title("Mid-price traces")
-    axes[5].set_xlabel("Event index")
+    axes[5].set_xlabel("Seconds into session (1s bars, common window)")
     axes[5].set_ylabel("Mid price")
     axes[5].legend()
 
