@@ -106,7 +106,12 @@ def _stats(shortfalls):
 
 def run_comparison(data_dir="data", symbol="INTC", qtable_path=None, n_seeds=30,
                     depth_noise=0.3, ddim_nsteps=10, out_path="logs/evaluate.jsonl", eval_seed=123,
-                    ckpt_path=None, skip_ddpm=False):
+                    ckpt_path=None, skip_ddpm=False, max_hours_per_arm=None):
+    """max_hours_per_arm caps the depth-noise arm; the DDPM-100 arm is then matched to
+    whatever the depth-noise arm actually used, so total runtime is ~2x the cap. Both arms
+    walk the SAME held-out seed list in the same order, so a truncated run is still a
+    like-for-like comparison over however many seeds it reached."""
+    arm_budget = max_hours_per_arm * 3600.0 if max_hours_per_arm else None
     seeds = generate_held_out_seeds(data_dir, symbol, n_seeds, seed=eval_seed)
     logger = JsonlLogger(out_path)
 
@@ -119,11 +124,13 @@ def run_comparison(data_dir="data", symbol="INTC", qtable_path=None, n_seeds=30,
     env_dn = ExecutionEnv(symbol=symbol, data_dir=data_dir, sampling_type="DDIM",
                            ddim_nsteps=ddim_nsteps, depth_noise=depth_noise, seed_days=None,
                            checkpoint_path=ckpt_path)
-    dn_twap, dn_wallclock, _ = evaluate_policy(env_dn, twap_policy, seeds, logger, "eval_depth_noise", "twap")
+    dn_twap, dn_wallclock, _ = evaluate_policy(env_dn, twap_policy, seeds, logger,
+                                                "eval_depth_noise", "twap", wall_clock_budget=arm_budget)
     results["depth_noise/twap"] = _stats(dn_twap)
     if trained_policy is not None:
         dn_trained, dn_wallclock_trained, _ = evaluate_policy(
-            env_dn, trained_policy, seeds, logger, "eval_depth_noise", "qlearning")
+            env_dn, trained_policy, seeds, logger, "eval_depth_noise", "qlearning",
+            wall_clock_budget=arm_budget)
         results["depth_noise/qlearning"] = _stats(dn_trained)
         dn_wallclock = max(dn_wallclock, dn_wallclock_trained)
 
@@ -176,9 +183,12 @@ if __name__ == "__main__":
     parser.add_argument("--eval-seed", type=int, default=123)
     parser.add_argument("--skip-ddpm", action="store_true",
                         help="smoke-test only: skip the slow DDPM-100 arm (produces NO sampler comparison)")
+    parser.add_argument("--max-hours-per-arm", type=float, default=None,
+                        help="cap the depth-noise arm's wall-clock; the DDPM-100 arm is matched to "
+                             "whatever it used, so total runtime is roughly twice this")
     args = parser.parse_args()
 
     run_comparison(data_dir=args.data_dir, symbol=args.symbol, qtable_path=args.qtable,
                     n_seeds=args.n_seeds, depth_noise=args.depth_noise, ddim_nsteps=args.ddim_nsteps,
                     out_path=args.out, eval_seed=args.eval_seed, ckpt_path=args.ckpt_path,
-                    skip_ddpm=args.skip_ddpm)
+                    skip_ddpm=args.skip_ddpm, max_hours_per_arm=args.max_hours_per_arm)

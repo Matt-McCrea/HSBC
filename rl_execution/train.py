@@ -19,11 +19,24 @@ from rl_execution.qlearning import N_ACTIONS, N_STATES, STATE_FEATURES, QLearnin
 
 def train(env: ExecutionEnv, policy: QLearningPolicy, n_episodes: int, checkpoint_path: str,
           checkpoint_every: int = 25, run_name="qlearning_train", out_path="logs/train.jsonl",
-          side=None):
+          side=None, max_hours=None):
+    """max_hours: stop cleanly once this much wall-clock has elapsed, whatever the
+    episode count. Episode cost varies ~7x with market regime (125s-1170s observed),
+    so an episode count alone gives no usable finish time -- which matters when a
+    booked GPU block has to fit training AND the evaluation that follows it.
+    """
     logger = JsonlLogger(out_path)
     start_episode = policy.episodes_trained
+    run_start = time.perf_counter()
+    budget_s = max_hours * 3600.0 if max_hours else None
 
     for ep in range(start_episode, start_episode + n_episodes):
+        if budget_s is not None:
+            elapsed = time.perf_counter() - run_start
+            if elapsed >= budget_s:
+                print(f"[train] wall-clock budget reached ({elapsed / 3600:.2f}h of {max_hours}h) "
+                      f"after {policy.episodes_trained} episodes -- stopping cleanly")
+                break
         ep_start = time.perf_counter()
         obs, info = env.reset(side=side)
         done = False
@@ -81,6 +94,10 @@ if __name__ == "__main__":
     parser.add_argument("--alpha", type=float, default=0.3, help="Q-learning rate")
     parser.add_argument("--epsilon-decay", type=float, default=0.97, help="per-episode epsilon decay")
     parser.add_argument("--gamma", type=float, default=1.0, help="discount factor")
+    parser.add_argument("--max-hours", type=float, default=None,
+                        help="stop cleanly after this much wall-clock, whatever the episode count "
+                             "(episode cost varies ~7x with market regime, so a count alone gives "
+                             "no usable finish time within a booked GPU block)")
     args = parser.parse_args()
 
     if args.resume and os.path.exists(args.checkpoint):
@@ -97,4 +114,4 @@ if __name__ == "__main__":
                         ddim_nsteps=args.ddim_nsteps, depth_noise=args.depth_noise,
                         checkpoint_path=args.ckpt_path)
     train(env, policy, args.n_episodes, args.checkpoint, checkpoint_every=args.checkpoint_every,
-          run_name=args.run_name, out_path=args.out, side=args.side)
+          run_name=args.run_name, out_path=args.out, side=args.side, max_hours=args.max_hours)
