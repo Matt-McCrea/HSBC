@@ -8,10 +8,34 @@ wall-clock speed of 100-step DDPM — and on the standard **LOB-Bench** benchmar
 realistic than DDPM, not a reduced-fidelity approximation. **Cross-day robustness is also now
 resolved**: `val_ema=0.724_epoch=0` is confirmed stable (zero timeouts) across all 20 trading days
 in the month, found via a systematic elimination search over a recovered checkpoint family — see the
-2026-08-03 handoff below. This is the FINAL model. A scheduled-sampling retrain was attempted to push
-its activity level closer to real and was refuted (see below); the pre-retrain checkpoint stands.
-Project is now moving to the downstream reinforcement-learning task (execution agent inside the
-simulator) on this checkpoint.
+2026-08-03 handoff below. A scheduled-sampling retrain was attempted on top of this; it did not
+achieve its original goal but produced an unanticipated, measured improvement on the full LOB-Bench
+benchmark instead (see 2026-08-05 update below). **Which checkpoint is the final model
+(`0.724_epoch=0` vs one of the SS-retrain epochs) is an open decision, deliberately left open here —
+not yet made.** Project is otherwise moving to the downstream reinforcement-learning task (execution
+agent inside the simulator).
+
+## UPDATE — 2026-08-05 (read after the 2026-08-03 handoff below)
+**The "REFUTED" verdict on the scheduled-sampling retrain (2026-08-03, below) was based on `uniq_mid`
+alone and is incomplete.** Full LOB-Bench scoring of the retrain epochs (`analysis/
+appendix_lobbench_and_refutations.md` §B) shows every epoch (2, 3, 4) scores a **better grand-mean
+Wasserstein than the baseline**: 0.468 (baseline) → 0.365 (epoch 2) → 0.356 (epoch 3) → **0.346
+(epoch 4)**, a ~26% improvement at epoch 4. The gain is driven mostly by a large improvement in spread
+realism (baseline's weakest metric, 0.719 → 0.192 at epoch 4), with modest gains on timing and book
+imbalance; limit/cancel depth are roughly flat. All three epochs are also independently
+stability-confirmed (cleared all 20 days, zero timeouts — same rigor as `0.724_epoch=0`).
+
+**Reconciling this with the "uniq_mid didn't move" finding**: these are different axes, not
+contradictory results. `uniq_mid` is a narrow proxy for price-level activity; LOB-Bench's six metrics
+measure order-flow *microstructure* realism (spread, timing, imbalance, depth placement). The retrain
+produced a real, measured benefit on the latter without moving the former — the original hypothesis
+(raise activity toward real levels) is still not confirmed, but "scheduled sampling didn't help" is
+no longer an accurate summary. See the reconciliation figure:
+`analysis/plots/hsbc_ss_retrain_*/3_reconciliation_panel.png`.
+
+**Decision on final model deliberately NOT made here** — full data for all candidates
+(`0.724_epoch=0`, and SS-retrain epochs 2/3/4) is in `analysis/appendix_lobbench_and_refutations.md`
+and `analysis/appendix_checkpoint_evidence.md` for review.
 
 ## SESSION HANDOFF — 2026-08-03 (READ FIRST when you return)
 **FINAL MODEL: `val_ema=0.724_epoch=0`.** Confirmed stable across all 20 trading days in Jan 2015
@@ -34,12 +58,11 @@ configured but unused); and `SS_RAMP_FRAC` cut to 0.0 (no ramp) since `current_e
 reset/relabel on every training resume. Ran a pure-DDIM lineage from `0.724_epoch=0` through epoch 5.
 **Result: uniq_mid did NOT climb toward real levels — flat to slightly declining across epochs
 (median ~14→13→11→13 for epochs 0/2/3/4), and epoch 5 introduced a new stability regression (timed
-out on a day epoch 4 handled fine).** Killed 2026-08-03. `0.724_epoch=0` remains the final model,
-unchanged. TODO before writing this up: LOB-Bench the epoch 2/3/4 CSVs against `0.724_epoch=0` for
-the full 6-metric picture (uniq_mid was only ever a triage proxy) — `scripts/lob_bench_multiday.sh`.
-**Write-up framing**: legitimate negative result, same standard as every other refuted lever in this
-project (the controller, flow-balance, cancel-boost, cond-clip below) — state the hypothesis, the fix
-attempts, the measured non-result, and the decision to retain the pre-retrain checkpoint.
+out on a day epoch 4 handled fine).** Killed 2026-08-03. TODO before writing this up: LOB-Bench the
+epoch 2/3/4 CSVs against `0.724_epoch=0` for the full 6-metric picture (uniq_mid was only ever a
+triage proxy) — `scripts/lob_bench_multiday.sh`.
+**[SUPERSEDED — see the 2026-08-05 update above.]** That LOB-Bench scoring is now done and changes
+the picture: this was not a clean negative result after all. Do not treat "REFUTED" here as final.
 
 **NEXT: reinforcement-learning task** — place an execution/trading agent inside the simulator, using
 `0.724_epoch=0` as the backbone (deliberately the most rigorously-validated checkpoint, to avoid the
