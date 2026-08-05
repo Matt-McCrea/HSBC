@@ -9,7 +9,17 @@ import matplotlib.pyplot as plt
 MAX_LAG = 30
 
 
-def load_processed(path, label):
+def load_processed(path, label, resample="1s"):
+    """resample: pandas offset alias (e.g. '1s') to bar the raw event stream onto a fixed time
+    grid before computing returns, or None to keep the old raw-event-level behaviour.
+
+    Raw per-event returns are the wrong sampling for lag-based stylized facts here: a LOB session
+    has hundreds of thousands of events, so a lag of 1-30 EVENTS overlaps 99.99%+ of the series and
+    any lag structure is invisible (checked empirically: correlation varies by ~1e-4 across lags
+    1-30 on raw events, indistinguishable from a flat line at any plot scale). Resampling to a fixed
+    time interval first — the same convention used elsewhere in this project for ret1s_std — makes
+    a lag of 1-30 a meaningful fraction of a 30-minute window (30-1800 bars) instead of a rounding
+    error against 400k+ rows."""
     df = pd.read_csv(path)
 
     # Time column
@@ -19,6 +29,7 @@ def load_processed(path, label):
         df["datetime"] = pd.to_datetime(df["timestamp"], errors="coerce")
     else:
         df["datetime"] = pd.RangeIndex(len(df))
+        resample = None  # no real timestamps to resample against
 
     # Mid price
     if "MID_PRICE" in df.columns:
@@ -41,8 +52,14 @@ def load_processed(path, label):
         df["volume"] = 1.0
 
     df = df.replace([np.inf, -np.inf], np.nan)
-    df = df.dropna(subset=["mid"])
+    df = df.dropna(subset=["mid", "datetime"])
     df = df[df["mid"] > 0].copy()
+
+    if resample:
+        g = df.set_index("datetime").sort_index()
+        mid = g["mid"].resample(resample).last().ffill()
+        vol = g["volume"].resample(resample).sum()
+        df = pd.DataFrame({"mid": mid, "volume": vol}).dropna(subset=["mid"]).reset_index()
 
     df["label"] = label
     df["log_mid"] = np.log(df["mid"])
