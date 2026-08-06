@@ -1,7 +1,20 @@
-# §5.1 Replication baselines — working folder
+# §5.1 Replication baselines — handoff folder
 
-*Assembled 2026-08-06. Everything needed to show our reproduction of TRADES's two reference
-points behaves comparably to their released model.*
+*Assembled 2026-08-06. Self-contained: everything needed to write §5.1. Start with
+`WRITEUP_NUMBERS.md` for the prose-ready figures, this README for what each artefact shows.*
+
+```
+README.md                  <- you are here: index + caveats
+WRITEUP_NUMBERS.md         <- prose-ready numbers, section ordering, provenance warnings
+figures/                   <- 9 figures
+tables/
+  paper_reported_numbers.md    <- TRADES's OWN published results (cite as theirs)
+  lobbench_theirs_vs_ours.md   <- our LOB-Bench scoring, theirs vs ours
+  flow_composition_source.md   <- flow mix across four stock-days
+  ddim1_collapse_numbers.md    <- the single-step collapse, quantified
+lob_bench/                 <- raw per-metric scores (CSV)
+data/                      <- their released CSVs, timestamps repaired
+```
 
 **Headline number**: on INTC 2015-01-30, scored on LOB-Bench against the same real market data,
 TRADES's released DDPM output scores **0.798** and our DDPM-100 replication scores **0.774** —
@@ -92,6 +105,20 @@ slice, which is the standard approach, but it means the comparison is between mo
 against real — not a controlled head-to-head. Say so once.
 
 ---
+
+## Two further observations about *their* released model
+
+Both visible in `stylized_THEIRS_ddpm_INTC_0130.png`, and both are properties of the **published**
+model rather than anything this project introduced — which makes them safe and useful to state:
+
+1. **Their model is range-bound too.** Its mid-price stays within roughly 33.85–33.95 across the
+   session while the real market declines from 34.0 to 33.4. It does not track the day's trend.
+   This matters because the same criticism is later levelled at our models: it is a property of the
+   architecture, not of the acceleration.
+2. **Wrong sign on volume–volatility correlation**: theirs sits at about −0.03 where real is +0.41.
+
+Stating these in §5.1 is not point-scoring — it establishes the baseline's characteristics honestly
+before §5.2 diagnoses what acceleration adds on top.
 
 ## The finding worth making explicit
 
