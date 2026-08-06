@@ -40,8 +40,25 @@ market period. Row counts in each match to within a few bars.
 
 ## Tables
 
+- **`tables/paper_reported_numbers.md`** — **TRADES's own published results**, extracted from the
+  paper: their Table 1 (predictive score vs IABS/CGAN/market replay), Table 2 (DDPM-100 vs DDIM-1 —
+  the two reference points), Table 3 (ablations), PCA coverage, and their full experimental setup.
+  Cite these as theirs.
 - `tables/lobbench_theirs_vs_ours.md` — full per-metric LOB-Bench, both days, with means
 - `tables/flow_composition_source.md` — the flow-composition source table (theirs across four stock-days)
+
+### Their headline: the gap you are closing
+
+| Method | Tesla | Intel |
+|---|---|---|
+| DDIM *(single step)* | 3.146 | 0.486 |
+| DDPM *(100 steps)* | 1.213 | 0.307 |
+
+> *"the performance degradation is significant but not disastrous despite a remarkable 100-fold
+> increase in computational efficiency."* — TRADES, on their single-step option
+
+Worth quoting verbatim in §5.1. They offer the speed/quality trade-off and judge its cost
+acceptable; the dissertation's contribution is that the trade-off need not be accepted.
 
 ## Raw scores
 
