@@ -136,7 +136,17 @@ def main(real_path, gen_path, out_path, real_label="Real", gen_label="TRADES"):
         print("WARNING: very few rows; plots will be noisy.")
 
     datasets = [(real_label, real), (gen_label, gen)]
-    lags = np.arange(1, MAX_LAG + 1)
+
+    # Cap the lag range to the session length. At 1-minute bars a 30-minute session yields only
+    # ~30 bars, so a lag of 30 would compare a series against almost nothing --- autocorr() would
+    # return NaN outright and corr_by_lag() would rest on a handful of overlapping points. Allow a
+    # lag of at most ~40% of the available bars, which keeps every estimate on a usable sample.
+    n_bars = min(len(real), len(gen))
+    max_lag = max(3, min(MAX_LAG, int(0.4 * n_bars)))
+    if max_lag < MAX_LAG:
+        print(f"note: {n_bars} {RESAMPLE} bars available -> lag range capped at {max_lag} "
+              f"(a {MAX_LAG}-lag range would exceed the session)")
+    lags = np.arange(1, max_lag + 1)
 
     # The mid-price trace is a time series, not a lag statistic, so it keeps SECOND resolution
     # regardless of the bar size used for the correlation panels. At 1-minute bars a 75-minute
@@ -150,7 +160,7 @@ def main(real_path, gen_path, out_path, real_label="Real", gen_label="TRADES"):
 
     # 1. Log-return autocorrelation
     for label, df in datasets:
-        axes[0].plot(lags, autocorr(df["log_return"], MAX_LAG), marker="o", linewidth=1, label=label)
+        axes[0].plot(lags, autocorr(df["log_return"], max_lag), marker="o", linewidth=1, label=label)
     axes[0].axhline(0, linewidth=0.8)
     axes[0].set_title("Log returns autocorrelation")
     axes[0].set_xlabel(LAGLBL)
@@ -160,7 +170,7 @@ def main(real_path, gen_path, out_path, real_label="Real", gen_label="TRADES"):
     # 2. Correlation between volume and volatility
     for label, df in datasets:
         f = rolling_features(df)
-        axes[1].plot(lags, corr_by_lag(f["rolling_volume"], f["volatility"], MAX_LAG),
+        axes[1].plot(lags, corr_by_lag(f["rolling_volume"], f["volatility"], max_lag),
                      marker="o", linewidth=1, label=label)
     axes[1].axhline(0, linewidth=0.8)
     axes[1].set_title("Correlation between volume and volatility")
@@ -171,7 +181,7 @@ def main(real_path, gen_path, out_path, real_label="Real", gen_label="TRADES"):
     # 3. Correlation between returns and volatility
     for label, df in datasets:
         f = rolling_features(df)
-        axes[2].plot(lags, corr_by_lag(f["log_return"], f["volatility"], MAX_LAG),
+        axes[2].plot(lags, corr_by_lag(f["log_return"], f["volatility"], max_lag),
                      marker="o", linewidth=1, label=label)
     axes[2].axhline(0, linewidth=0.8)
     axes[2].set_title("Correlation between returns and volatility")
@@ -192,7 +202,7 @@ def main(real_path, gen_path, out_path, real_label="Real", gen_label="TRADES"):
 
     # 5. Absolute log-return autocorrelation
     for label, df in datasets:
-        axes[4].plot(lags, autocorr(df["log_return"].abs(), MAX_LAG),
+        axes[4].plot(lags, autocorr(df["log_return"].abs(), max_lag),
                      marker="o", linewidth=1, label=label)
     axes[4].axhline(0, linewidth=0.8)
     axes[4].set_title("Autocorrelation log returns distribution")
