@@ -173,3 +173,24 @@ python3 scripts/make_replication_baseline_figs.py
   §8, a *different* DDPM-100 run from the `sweep_results/` one scored here (18.8% vs 10.17% executed;
   23 vs 101 unique mids). Both are legitimate; do not mix them. See
   `analysis/results_51_replication_numbers.md`.
+
+---
+
+## Note on the stylised-fact convention
+
+All batteries here are computed on **1-minute bars with lags 1–30 minutes**, matching the TRADES
+paper's own "Lag (minutes)" 0–30 axis, so the panels are directly comparable to their published
+figures.
+
+This was corrected on 2026-08-06. The earlier version used 1-second bars, which left lags 1–30
+spanning only 1–30 *seconds*: on a 75–120 minute session that removes under 1% of the series, so the
+correlation barely changed across lags and the panels rendered as flat lines (measured:
+volume-volatility varied by 0.003 across all lags on the released TRADES output). At 1-minute bars
+the same lag range covers a quarter to half the session and the structure is visible — real
+volume-volatility now spans 0.81 where it previously spanned 0.02.
+
+Caveat to state if pressed: a 75-minute session gives only ~75 one-minute bars, so lag-30
+correlations rest on ~45 overlapping points and are noisy. That is inherent to the paper's own
+convention on a session of this length, not a choice made here.
+
+Override with `--resample 1s` (or any pandas offset) if a different convention is wanted.

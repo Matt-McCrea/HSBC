@@ -8,8 +8,19 @@ import matplotlib.pyplot as plt
 
 MAX_LAG = 30
 
+# Bar interval the series is resampled to before returns/volatility are computed. Lags are then
+# expressed in THESE units, so "1min" + MAX_LAG=30 reproduces the TRADES paper's "Lag (minutes)"
+# 0-30 axis and makes our panels directly comparable to theirs.
+#
+# Why not 1s: on a 75-120 minute session, 1s bars give 4500-7200 points, so a lag of 1-30 removes
+# under 1% of the series and the correlation is essentially unchanged across lags --- the panels
+# come out flat (measured: vol-volatility varies by 0.0027 across lags 1-30 on the released TRADES
+# output at 1s). At 1min the same lag range spans a quarter to half the session and the structure
+# is visible. Override with --resample for a different convention.
+RESAMPLE = "1min"
 
-def load_processed(path, label, resample="1s"):
+
+def load_processed(path, label, resample=None):
     """resample: pandas offset alias (e.g. '1s') to bar the raw event stream onto a fixed time
     grid before computing returns, or None to keep the old raw-event-level behaviour.
 
@@ -20,6 +31,7 @@ def load_processed(path, label, resample="1s"):
     time interval first — the same convention used elsewhere in this project for ret1s_std — makes
     a lag of 1-30 a meaningful fraction of a 30-minute window (30-1800 bars) instead of a rounding
     error against 400k+ rows."""
+    resample = RESAMPLE if resample is None else resample
     df = pd.read_csv(path)
 
     # Time column
@@ -82,7 +94,11 @@ def autocorr(x, max_lag=30):
     return np.array(values)
 
 
-def rolling_features(df, window=50):
+def rolling_features(df, window=None):
+    # window is in BARS. At 1min bars a 50-bar window would eat most of a 75-120 min
+    # session, so scale it down; at 1s keep the original 50.
+    if window is None:
+        window = 5 if RESAMPLE.endswith(("min", "T")) else 50
     out = df.copy()
     out["abs_return"] = out["log_return"].abs()
     out["volatility"] = out["log_return"].rolling(window).std()
@@ -104,6 +120,8 @@ def corr_by_lag(x, y, max_lag=30):
 
 
 def main(real_path, gen_path, out_path, real_label="Real", gen_label="TRADES"):
+    global LAGLBL
+    LAGLBL = "Lag (minutes)" if RESAMPLE.endswith(("min","T")) else f"Lag ({RESAMPLE} bars)"
     real = load_processed(real_path, real_label)
     gen = load_processed(gen_path, gen_label)
 
@@ -124,7 +142,7 @@ def main(real_path, gen_path, out_path, real_label="Real", gen_label="TRADES"):
         axes[0].plot(lags, autocorr(df["log_return"], MAX_LAG), marker="o", linewidth=1, label=label)
     axes[0].axhline(0, linewidth=0.8)
     axes[0].set_title("Log returns autocorrelation")
-    axes[0].set_xlabel("Lag")
+    axes[0].set_xlabel(LAGLBL)
     axes[0].set_ylabel("Autocorrelation")
     axes[0].legend()
 
@@ -135,7 +153,7 @@ def main(real_path, gen_path, out_path, real_label="Real", gen_label="TRADES"):
                      marker="o", linewidth=1, label=label)
     axes[1].axhline(0, linewidth=0.8)
     axes[1].set_title("Correlation between volume and volatility")
-    axes[1].set_xlabel("Lag")
+    axes[1].set_xlabel(LAGLBL)
     axes[1].set_ylabel("Correlation")
     axes[1].legend()
 
@@ -146,7 +164,7 @@ def main(real_path, gen_path, out_path, real_label="Real", gen_label="TRADES"):
                      marker="o", linewidth=1, label=label)
     axes[2].axhline(0, linewidth=0.8)
     axes[2].set_title("Correlation between returns and volatility")
-    axes[2].set_xlabel("Lag")
+    axes[2].set_xlabel(LAGLBL)
     axes[2].set_ylabel("Correlation")
     axes[2].legend()
 
@@ -167,7 +185,7 @@ def main(real_path, gen_path, out_path, real_label="Real", gen_label="TRADES"):
                      marker="o", linewidth=1, label=label)
     axes[4].axhline(0, linewidth=0.8)
     axes[4].set_title("Autocorrelation log returns distribution")
-    axes[4].set_xlabel("Lag")
+    axes[4].set_xlabel(LAGLBL)
     axes[4].set_ylabel("Autocorrelation")
     axes[4].legend()
 
@@ -184,7 +202,7 @@ def main(real_path, gen_path, out_path, real_label="Real", gen_label="TRADES"):
             trace = trace.iloc[np.linspace(0, len(trace)-1, 5000).astype(int)]
         axes[5].plot(np.arange(len(trace)), trace, linewidth=1, label=label)
     axes[5].set_title("Mid-price traces")
-    axes[5].set_xlabel("Seconds into session (1s bars, common window)")
+    axes[5].set_xlabel(f"Bars into session ({RESAMPLE} bars, common window)")
     axes[5].set_ylabel("Mid price")
     axes[5].legend()
 
@@ -197,6 +215,8 @@ def main(real_path, gen_path, out_path, real_label="Real", gen_label="TRADES"):
 
 
 if __name__ == "__main__":
+    if "--resample" in sys.argv:
+        i = sys.argv.index("--resample"); RESAMPLE = sys.argv[i+1]; del sys.argv[i:i+2]
     if len(sys.argv) != 4:
         print("Usage: python paper_style_stylized_facts.py REAL_CSV GENERATED_CSV OUT_PNG")
         sys.exit(1)
