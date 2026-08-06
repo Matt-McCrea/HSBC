@@ -15,9 +15,9 @@ import uuid
 EPISODE_LOG_FIELDS = (
     "run_name", "run_id", "timestamp", "seed_day", "t0", "side", "Q", "sampling_type",
     "depth_noise", "ddim_nsteps", "checkpoint", "policy_name", "wall_clock_total_s",
-    "wall_clock_reconstruct_s", "wall_clock_simulate_s", "p_arrival", "shortfall",
-    "shortfall_bps", "reward", "n_resting_orders", "n_steps", "fills", "cond_z",
-    "flow_mix", "execution_rate", "unique_mid_count", "error",
+    "wall_clock_reconstruct_s", "wall_clock_simulate_s", "p_arrival", "p_final",
+    "shortfall", "shortfall_bps", "drift_bps", "reward", "n_resting_orders", "n_steps",
+    "fills", "cond_z", "flow_mix", "execution_rate", "unique_mid_count", "trajectory", "error",
 )
 
 
@@ -58,6 +58,45 @@ def shortfall_bps(info):
     if shortfall is None or not p_arrival:
         return None
     return float(shortfall) / float(p_arrival) * 10_000.0
+
+
+def trajectory_step(obs, action, reward, done):
+    """One decision point, recorded so a Q-table can be re-fit OFFLINE later.
+
+    Episode-level logging alone means every learning-rule change (a different alpha
+    schedule, a drift-adjusted reward, reinstating the held-back state features)
+    costs a full re-simulation at ~10 minutes per episode. Recording the raw
+    observation plus the action taken decouples the expensive part (simulating the
+    market) from the cheap part (fitting values to it) -- see rl_execution/refit_qtable.py.
+
+    Stores the raw observation, not a state index, so a refit is free to bucket the
+    state differently from however the run that produced it happened to.
+    """
+    return {
+        "t_rem": obs["time_remaining_frac"],
+        "inv_rem": obs["inventory_remaining_frac"],
+        "spread": obs["spread_bucket"],
+        "vol": obs["vol_bucket"],
+        "ofi": obs["ofi_bucket"],
+        "a": int(action),
+        "r": float(reward),
+        "done": bool(done),
+    }
+
+
+def drift_bps(info):
+    """Market move over the episode, in bps of the arrival mid: (p_final - p_arrival).
+
+    Positive drift is favourable to a SELLER (they sell into a rising market) and
+    unfavourable to a buyer. Shortfall alone conflates this with execution quality;
+    reporting both lets the Results chapter say how much of a shortfall was the market
+    moving rather than the policy choosing well.
+    """
+    p_final = info.get("p_final")
+    p_arrival = info.get("p_arrival")
+    if p_final is None or not p_arrival:
+        return None
+    return (float(p_final) - float(p_arrival)) / float(p_arrival) * 10_000.0
 
 
 def _json_default(o):

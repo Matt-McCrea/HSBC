@@ -218,6 +218,12 @@ class RLExecutionAgent(TradingAgent):
             "shortfall": shortfall,
             "decisions_made": self.decision_index,
             "termination_reason": reason,
+            # Mid at the last decision point. Shortfall alone cannot separate execution
+            # quality from where the market simply went: with a SELL-only design, any
+            # upward drift in the generated price flatters the seller, and TRADES has a
+            # documented directional-drift failure mode (see --flow-balance). Logging the
+            # closing mid makes that decomposable after the fact instead of confounded.
+            "p_final": (self.mid_history[-1] if self.mid_history else None),
         }
         self.state_queue.put(("done", -shortfall, info))
 

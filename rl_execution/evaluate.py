@@ -20,7 +20,8 @@ import numpy as np
 from rl_execution import coldstart, env as env_module
 from rl_execution.env import ExecutionEnv
 from rl_execution.orderbook_reconstructor import DEFAULT_MARKET_OPEN
-from rl_execution.logging_utils import JsonlLogger, shortfall_bps as _bps
+from rl_execution.logging_utils import (JsonlLogger, drift_bps as _drift,
+                                         shortfall_bps as _bps, trajectory_step as _traj)
 from rl_execution.qlearning import QLearningPolicy, TWAPPolicy
 
 
@@ -70,9 +71,12 @@ def evaluate_policy(env: ExecutionEnv, policy, seeds, logger: JsonlLogger, run_n
         obs, info = env.reset(t0=s["t0"], side=s["side"], Q=s["Q"], seed_day=s["seed_day"])
         done = False
         reward = 0.0
+        trajectory = []
         while not done:
             action = policy.select_action(obs, greedy=True)
+            prev_obs = obs
             obs, reward, done, info = env.step(action)
+            trajectory.append(_traj(prev_obs, action, reward, done))
         elapsed = time.perf_counter() - start
         wall_clock_used += elapsed
         n_run += 1
@@ -84,11 +88,12 @@ def evaluate_policy(env: ExecutionEnv, policy, seeds, logger: JsonlLogger, run_n
             ddim_nsteps=info["ddim_nsteps"], checkpoint=info["checkpoint"],
             policy_name=policy_name, wall_clock_total_s=info["wall_clock_total_s"],
             wall_clock_reconstruct_s=info["wall_clock_reconstruct_s"],
-            wall_clock_simulate_s=info["wall_clock_simulate_s"], p_arrival=info["p_arrival"],
-            shortfall=info["shortfall"], shortfall_bps=_bps(info), reward=reward,
+            wall_clock_simulate_s=info["wall_clock_simulate_s"], p_arrival=info["p_arrival"], p_final=info.get("p_final"),
+            shortfall=info["shortfall"], shortfall_bps=_bps(info), drift_bps=_drift(info), reward=reward,
             n_resting_orders=info["n_resting_orders"],
             fills=info["fills"], cond_z=info["cond_stats"], flow_mix=info["flow_mix"],
             execution_rate=info["execution_rate"], unique_mid_count=info["unique_mid_count"],
+            trajectory=trajectory,
         )
         print(f"  [{policy_name}] seed {n_run}/{len(seeds)}: shortfall={info['shortfall']:.4f} "
               f"wall_clock={elapsed:.1f}s")

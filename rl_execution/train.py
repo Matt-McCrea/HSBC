@@ -13,7 +13,8 @@ import time
 import numpy as np
 
 from rl_execution.env import ExecutionEnv
-from rl_execution.logging_utils import JsonlLogger, shortfall_bps as _bps
+from rl_execution.logging_utils import (JsonlLogger, drift_bps as _drift,
+                                         shortfall_bps as _bps, trajectory_step as _traj)
 from rl_execution.qlearning import N_ACTIONS, N_STATES, STATE_FEATURES, QLearningPolicy
 
 
@@ -40,9 +41,11 @@ def train(env: ExecutionEnv, policy: QLearningPolicy, n_episodes: int, checkpoin
         ep_start = time.perf_counter()
         obs, info = env.reset(side=side)
         done = False
+        trajectory = []
         while not done:
             action = policy.select_action(obs)
             next_obs, reward, done, info = env.step(action)
+            trajectory.append(_traj(obs, action, reward, done))
             policy.update(obs, action, reward, next_obs, done)
             obs = next_obs
         policy.end_episode()
@@ -54,11 +57,12 @@ def train(env: ExecutionEnv, policy: QLearningPolicy, n_episodes: int, checkpoin
             ddim_nsteps=info["ddim_nsteps"], checkpoint=info["checkpoint"],
             policy_name=f"qlearning_eps{policy.epsilon:.3f}", wall_clock_total_s=info["wall_clock_total_s"],
             wall_clock_reconstruct_s=info["wall_clock_reconstruct_s"],
-            wall_clock_simulate_s=info["wall_clock_simulate_s"], p_arrival=info["p_arrival"],
-            shortfall=info["shortfall"], shortfall_bps=_bps(info), reward=reward,
+            wall_clock_simulate_s=info["wall_clock_simulate_s"], p_arrival=info["p_arrival"], p_final=info.get("p_final"),
+            shortfall=info["shortfall"], shortfall_bps=_bps(info), drift_bps=_drift(info), reward=reward,
             n_resting_orders=info["n_resting_orders"],
             fills=info["fills"], cond_z=info["cond_stats"], flow_mix=info["flow_mix"],
             execution_rate=info["execution_rate"], unique_mid_count=info["unique_mid_count"],
+            trajectory=trajectory,
         )
         print(f"episode {ep + 1} (trained {policy.episodes_trained}): "
               f"wall_clock={ep_elapsed:.1f}s  shortfall={info['shortfall']:.4f}  "

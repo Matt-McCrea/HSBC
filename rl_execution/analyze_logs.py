@@ -123,12 +123,38 @@ def summarize(df: pd.DataFrame, by=None):
         if col in df.columns:
             print(_fmt(_robust_stats(df[col]), label))
 
+    _drift(df)
+
     print("\nMARKET DIAGNOSTICS")
     for col in ("execution_rate", "unique_mid_count", "n_resting_orders"):
         if col in df.columns:
             print(_fmt(_robust_stats(df[col]), col))
 
     _outliers(df)
+
+
+def _drift(df: pd.DataFrame):
+    """Separate 'where the market went' from 'how well the policy traded'.
+
+    With a single-sided (e.g. SELL-only) design, any directional drift in the
+    generated price systematically flatters or penalises the agent -- and TRADES has
+    a documented directional-drift failure mode. If shortfall tracks drift closely,
+    the shortfall level is mostly the market moving, not the policy choosing well.
+    """
+    if "drift_bps" not in df.columns or df["drift_bps"].isna().all():
+        print("\nMARKET DRIFT: not logged in this run "
+              "(p_final added later; drift cannot be separated from execution here)")
+        return
+    d = df["drift_bps"].dropna()
+    print("\nMARKET DRIFT over the episode (bps; +ve = price rose, which favours a SELLER)")
+    print(_fmt(_robust_stats(d), "drift"))
+    both = df[["shortfall_bps", "drift_bps"]].dropna()
+    if len(both) >= 3:
+        r = both["shortfall_bps"].corr(both["drift_bps"])
+        print(f"  correlation(shortfall, drift) = {r:+.3f}")
+        if abs(r) > 0.6:
+            print("  -> shortfall is largely explained by where the market went, not by the policy;")
+            print("     quote the POLICY-VS-BENCHMARK difference rather than the absolute level.")
 
 
 def _outliers(df: pd.DataFrame, k=3.0):

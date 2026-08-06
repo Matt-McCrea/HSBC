@@ -16,7 +16,8 @@ import time
 import numpy as np
 
 from rl_execution.env import ExecutionEnv
-from rl_execution.logging_utils import JsonlLogger, shortfall_bps as _bps
+from rl_execution.logging_utils import (JsonlLogger, drift_bps as _drift,
+                                         shortfall_bps as _bps, trajectory_step as _traj)
 
 
 def run_benchmark(env: ExecutionEnv, n_episodes: int, policy=None, run_name="benchmark", out_path="logs/benchmark.jsonl"):
@@ -33,9 +34,12 @@ def run_benchmark(env: ExecutionEnv, n_episodes: int, policy=None, run_name="ben
         ep_start = time.perf_counter()
         obs, info = env.reset()
         done = False
+        trajectory = []
         while not done:
             action = policy(obs)
+            prev_obs = obs
             obs, reward, done, info = env.step(action)
+            trajectory.append(_traj(prev_obs, action, reward, done))
         ep_elapsed = time.perf_counter() - ep_start
 
         record = logger.log_episode(
@@ -44,11 +48,12 @@ def run_benchmark(env: ExecutionEnv, n_episodes: int, policy=None, run_name="ben
             ddim_nsteps=info["ddim_nsteps"], checkpoint=info["checkpoint"],
             policy_name="random", wall_clock_total_s=info["wall_clock_total_s"],
             wall_clock_reconstruct_s=info["wall_clock_reconstruct_s"],
-            wall_clock_simulate_s=info["wall_clock_simulate_s"], p_arrival=info["p_arrival"],
-            shortfall=info["shortfall"], shortfall_bps=_bps(info), reward=reward,
+            wall_clock_simulate_s=info["wall_clock_simulate_s"], p_arrival=info["p_arrival"], p_final=info.get("p_final"),
+            shortfall=info["shortfall"], shortfall_bps=_bps(info), drift_bps=_drift(info), reward=reward,
             n_resting_orders=info["n_resting_orders"],
             fills=info["fills"], cond_z=info["cond_stats"], flow_mix=info["flow_mix"],
             execution_rate=info["execution_rate"], unique_mid_count=info["unique_mid_count"],
+            trajectory=trajectory,
         )
         records.append(record)
         print(f"episode {ep + 1}/{n_episodes}: wall_clock={ep_elapsed:.1f}s "
