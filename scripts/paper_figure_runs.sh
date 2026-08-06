@@ -39,6 +39,13 @@ CAP=10800                                                        # 3h per-cell c
 #   0.724_epoch=0 = pre-SS baseline
 HEADLINE="0.69_epoch=4"
 OTHER="0.724_epoch=0"
+
+# The sampler ablation (P3) runs on the VANILLA-TRAINED checkpoint regardless of what ships.
+# Scheduled sampling adapted its model specifically to its own DDIM-10 rollouts, so 100-step
+# sampling is not a fair "full quality ceiling" for an SS checkpoint --- the ablation would be
+# confounded by training rather than isolating the step count. 0.724 is vanilla-trained, so
+# DDPM-100 there is a clean upper reference.
+ABLATION="0.724_epoch=0"
 PHASES="1,2,3,4,5"; DRY=0
 OUT_DIR="paper_runs/$(date +%Y%m%d_%H%M%S)"
 
@@ -117,8 +124,10 @@ PLAN (est. ~8h of a 9-10h window)
  P2  ~2.8h  long-horizon, 2h 0129 10:00-12:00   *** the critical gap ***
             - winner 0.724 base config
             - SS epoch 4 base config            -> both final-model candidates past minute 73
- P3  ~2.5h  DDPM-100 on the HEADLINE checkpoint, 30min, 0130 + 0129
-            -> same-checkpoint acceleration claim for the model that ships
+ P3  ~2.5h  step-count ablation: DDPM-100 vs DDIM-10, 30min, 0130 + 0129
+            - runs on ABLATION ckpt (vanilla-trained), NOT the SS one
+            - NOT a TRADES baseline: this checkpoint has our data fixes in it
+            -> isolates 100 steps vs 10 steps, holding the model constant
  P4  ~1.4h  long-horizon WITH book-balancing lever, 2h 0129, HEADLINE model
             -> does the shipped model still need the lever?
  P5  ~1.4h  seed robustness, 30min 0130, seeds 31/32, BOTH candidates
@@ -169,8 +178,8 @@ fi
 if have_phase 3; then
   echo ""; echo "########## P3: DDPM-100 on the current checkpoint (~2.5h) ##########"
   echo "# gives a same-checkpoint acceleration comparison; the existing one is on ckpt 0.627"
-  run p3_ddpm100_0130 "$HEADLINE" 20150130 09:30:00 10:00:00 DDPM 100 30 $WIN
-  run p3_ddpm100_0129 "$HEADLINE" 20150129 09:30:00 10:00:00 DDPM 100 30 $WIN
+  run p3_ddpm100_0130 "$ABLATION" 20150130 09:30:00 10:00:00 DDPM 100 30 $WIN
+  run p3_ddpm100_0129 "$ABLATION" 20150129 09:30:00 10:00:00 DDPM 100 30 $WIN
 fi
 
 # ================================================================ PHASE 4
