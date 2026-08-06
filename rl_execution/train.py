@@ -95,7 +95,10 @@ if __name__ == "__main__":
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--out", default="logs/train.jsonl")
     parser.add_argument("--run-name", default="qlearning_train")
-    parser.add_argument("--alpha", type=float, default=0.3, help="Q-learning rate")
+    parser.add_argument("--alpha", type=float, default=0.3, help="Q-learning rate (fixed mode only)")
+    parser.add_argument("--alpha-mode", choices=["fixed", "visit-count"], default="fixed",
+                        help="visit-count sets alpha=1/N(s,a), making Q the running mean return -- "
+                             "the principled estimator when gamma=1 and reward is terminal-only")
     parser.add_argument("--epsilon-decay", type=float, default=0.97, help="per-episode epsilon decay")
     parser.add_argument("--gamma", type=float, default=1.0, help="discount factor")
     parser.add_argument("--max-hours", type=float, default=None,
@@ -109,9 +112,10 @@ if __name__ == "__main__":
         print(f"resumed from {args.checkpoint}: {policy.episodes_trained} episodes already trained")
     else:
         policy = QLearningPolicy(alpha=args.alpha, epsilon_decay=args.epsilon_decay,
-                                  gamma=args.gamma, random_state=np.random.RandomState())
+                                  gamma=args.gamma, random_state=np.random.RandomState(),
+                                  alpha_mode=args.alpha_mode)
     print(f"[train] states={N_STATES} (features={STATE_FEATURES}) actions={N_ACTIONS}  "
-          f"alpha={policy.alpha} eps_decay={policy.epsilon_decay} gamma={policy.gamma}  "
+          f"alpha={policy.alpha} ({policy.alpha_mode}) eps_decay={policy.epsilon_decay} gamma={policy.gamma}  "
           f"side={args.side or 'random'}")
 
     env = ExecutionEnv(symbol=args.symbol, data_dir=args.data_dir, sampling_type=args.sampling_type,

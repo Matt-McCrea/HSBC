@@ -73,8 +73,19 @@ class QLearningPolicy:
     #                  undiscounted matches the implementation-shortfall definition.
     def __init__(self, alpha=0.3, alpha_decay=1.0, alpha_min=0.01,
                  epsilon=1.0, epsilon_decay=0.97, epsilon_min=0.05,
-                 gamma=1.0, random_state=None):
+                 gamma=1.0, random_state=None, alpha_mode="fixed"):
         self.q = np.zeros((N_STATES, N_ACTIONS), dtype=np.float64)
+        # Per-entry visit counts: needed for alpha_mode="visit-count", and worth carrying
+        # regardless -- how often an entry was actually updated is what says whether its
+        # value can be trusted, and it is not recoverable from the Q-table alone.
+        self.visits = np.zeros((N_STATES, N_ACTIONS), dtype=np.int64)
+        # "visit-count" sets alpha = 1/N(s,a), making Q the running MEAN return. With
+        # gamma=1 and a single terminal reward that is exactly what Q is, so averaging is
+        # the principled estimator (Robbins-Monro). A fixed alpha=0.3 instead keeps only
+        # an effective ~3-episode window: with terminal rewards of sigma ~400 raw units
+        # against an action spread of ~140, the estimate tracks noise and the greedy
+        # policy visibly churns between checkpoints.
+        self.alpha_mode = alpha_mode
         self.alpha = alpha
         self.alpha_decay = alpha_decay
         self.alpha_min = alpha_min
@@ -97,7 +108,9 @@ class QLearningPolicy:
         if not done:
             s_next = state_to_index(next_obs)
             target += self.gamma * np.max(self.q[s_next])
-        self.q[s, action] += self.alpha * (target - self.q[s, action])
+        self.visits[s, action] += 1
+        step_alpha = (1.0 / self.visits[s, action]) if self.alpha_mode == "visit-count" else self.alpha
+        self.q[s, action] += step_alpha * (target - self.q[s, action])
 
     def end_episode(self):
         self.episodes_trained += 1
@@ -106,12 +119,12 @@ class QLearningPolicy:
 
     def save(self, path):
         os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
-        np.savez(path, q=self.q, episodes_trained=self.episodes_trained,
+        np.savez(path, q=self.q, visits=self.visits, episodes_trained=self.episodes_trained,
                  alpha=self.alpha, epsilon=self.epsilon,
                  hyperparams=json.dumps({
                      "alpha_decay": self.alpha_decay, "alpha_min": self.alpha_min,
                      "epsilon_decay": self.epsilon_decay, "epsilon_min": self.epsilon_min,
-                     "gamma": self.gamma,
+                     "gamma": self.gamma, "alpha_mode": self.alpha_mode,
                  }))
 
     @classmethod
@@ -120,8 +133,12 @@ class QLearningPolicy:
         hp = json.loads(str(data["hyperparams"]))
         policy = cls(alpha=float(data["alpha"]), alpha_decay=hp["alpha_decay"], alpha_min=hp["alpha_min"],
                      epsilon=float(data["epsilon"]), epsilon_decay=hp["epsilon_decay"], epsilon_min=hp["epsilon_min"],
-                     gamma=hp["gamma"], random_state=random_state)
+                     gamma=hp["gamma"], random_state=random_state,
+                     alpha_mode=hp.get("alpha_mode", "fixed"))
         policy.q = data["q"]
+        # visits absent in tables saved before visit-count alpha existed
+        if "visits" in data.files:
+            policy.visits = data["visits"]
         policy.episodes_trained = int(data["episodes_trained"])
         return policy
 

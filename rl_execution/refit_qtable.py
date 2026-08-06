@@ -85,9 +85,41 @@ def refit(records, alpha_mode="visit-count", alpha=0.3, gamma=1.0, drift_adjust=
     return q, visits, n_eps, n_steps, skipped
 
 
+def stability(records, n_points=5, **kw):
+    """Answers "is it converging, or just tracking noise?" -- refit on growing
+    prefixes of the SAME episodes and count how many greedy actions change
+    between successive fits.
+
+    A converging fit settles: later prefixes change few or no actions. A fit
+    dominated by reward noise keeps reshuffling no matter how many episodes are
+    added. This is the direct, quantitative version of eyeing successive policy
+    grids and noticing cells flip -- and because it refits already-simulated
+    episodes, it costs milliseconds rather than a re-run.
+    """
+    usable = [r for r in records if r.get("trajectory")]
+    if len(usable) < n_points * 2:
+        return []
+    cuts = [int(len(usable) * (i + 1) / n_points) for i in range(n_points)]
+    rows, prev_greedy, prev_visited = [], None, None
+    for cut in cuts:
+        q, visits, *_ = refit(usable[:cut], **kw)
+        visited = (visits > 0).any(axis=1)
+        greedy = q.argmax(axis=1)
+        changed = None
+        if prev_greedy is not None:
+            both = visited & prev_visited
+            changed = int((greedy[both] != prev_greedy[both]).sum()), int(both.sum())
+        rows.append({"episodes": cut, "states": int(visited.sum()), "changed": changed})
+        prev_greedy, prev_visited = greedy, visited
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("log", help="training .jsonl containing per-step trajectories")
+    parser.add_argument("--stability", action="store_true",
+                        help="refit on growing prefixes and report how many greedy actions "
+                             "change between them -- the convergence check")
     parser.add_argument("--alpha-mode", choices=["visit-count", "fixed"], default="visit-count")
     parser.add_argument("--alpha", type=float, default=0.3, help="used only with --alpha-mode fixed")
     parser.add_argument("--gamma", type=float, default=1.0)
@@ -127,6 +159,29 @@ def main():
     print(f"differs from TWAP : {differs}/{n_visited} ({differs / n_visited:.0%})")
     spread = q[visited].max(axis=1) - q[visited].min(axis=1)
     print(f"Q-value spread    : median={np.median(spread):.2f}  max={spread.max():.2f}")
+
+    if args.stability:
+        rows = stability(records, alpha_mode=args.alpha_mode, alpha=args.alpha,
+                          gamma=args.gamma, drift_adjust=args.drift_adjust)
+        print("\nCONVERGENCE — greedy actions changed between successive refits")
+        if not rows:
+            print("  too few episodes with trajectories to assess")
+        else:
+            for r in rows:
+                if r["changed"] is None:
+                    print(f"  after {r['episodes']:4d} episodes: {r['states']:2d} states visited   (baseline)")
+                else:
+                    ch, tot = r["changed"]
+                    pct = ch / tot if tot else 0.0
+                    print(f"  after {r['episodes']:4d} episodes: {r['states']:2d} states visited   "
+                          f"{ch}/{tot} greedy actions changed ({pct:.0%})")
+            last = rows[-1]["changed"]
+            if last and last[1]:
+                pct = last[0] / last[1]
+                verdict = ("settling — later episodes barely move the policy" if pct <= 0.10 else
+                           "still churning — the fit is tracking noise, not converging" if pct >= 0.25 else
+                           "partially settled")
+                print(f"  -> {verdict}")
 
     if args.out:
         policy = QLearningPolicy(alpha=args.alpha, gamma=args.gamma)
