@@ -19,6 +19,10 @@ MAX_LAG = 30
 # is visible. Override with --resample for a different convention.
 RESAMPLE = "1min"
 
+# The mid-price trace panel keeps second resolution regardless of RESAMPLE --- it is a time
+# series, not a lag statistic, and minute bars smooth away short sharp events.
+TRACE_RESAMPLE = "1s"
+
 
 def load_processed(path, label, resample=None):
     """resample: pandas offset alias (e.g. '1s') to bar the raw event stream onto a fixed time
@@ -134,6 +138,13 @@ def main(real_path, gen_path, out_path, real_label="Real", gen_label="TRADES"):
     datasets = [(real_label, real), (gen_label, gen)]
     lags = np.arange(1, MAX_LAG + 1)
 
+    # The mid-price trace is a time series, not a lag statistic, so it keeps SECOND resolution
+    # regardless of the bar size used for the correlation panels. At 1-minute bars a 75-minute
+    # session collapses to ~75 points and short, sharp events -- the single-step price collapse
+    # among them -- are smoothed away entirely.
+    fine = [(real_label, load_processed(real_path, real_label, resample=TRACE_RESAMPLE)),
+            (gen_label, load_processed(gen_path, gen_label, resample=TRACE_RESAMPLE))]
+
     fig, axes = plt.subplots(2, 3, figsize=(16, 9))
     axes = axes.ravel()
 
@@ -195,14 +206,14 @@ def main(real_path, gen_path, out_path, real_label="Real", gen_label="TRADES"):
     # wall-clock time than the generated session; plotting each against its own raw index
     # made the shorter one look like it "ran out" partway across the plot, when really the
     # two were just never aligned to the same time window in the first place.
-    common_len = min(len(df) for _, df in datasets)
-    for label, df in datasets:
+    common_len = min(len(df) for _, df in fine)
+    for label, df in fine:
         trace = df["mid"].reset_index(drop=True).iloc[:common_len]
         if len(trace) > 5000:
             trace = trace.iloc[np.linspace(0, len(trace)-1, 5000).astype(int)]
         axes[5].plot(np.arange(len(trace)), trace, linewidth=1, label=label)
     axes[5].set_title("Mid-price traces")
-    axes[5].set_xlabel(f"Bars into session ({RESAMPLE} bars, common window)")
+    axes[5].set_xlabel(f"Seconds into session ({TRACE_RESAMPLE} bars, common window)")
     axes[5].set_ylabel("Mid price")
     axes[5].legend()
 
