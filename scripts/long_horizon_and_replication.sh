@@ -7,11 +7,25 @@
 #   decode-time fix survives the regime where the replication failed --- every evaluation of
 #   the final models to date stops at minute 30.
 #
-# PRIORITY 2 --- the controlled replication pair for the Results section.
-#   Vanilla DDIM-1 on checkpoint 0.681, matched EXACTLY to the existing vanilla DDPM-100 run
-#   on that checkpoint (2015-01-30, 09:30-10:30). Same checkpoint, same day, same window,
-#   no decode-time interventions --- only the sampler differs. One denoising step, so this
-#   costs ~2 minutes.
+# PRIORITY 2 --- sampler ABLATION on the final-model checkpoint. NOT a replication.
+#   Runs vanilla DDIM-1 and vanilla DDIM-10 on ckpt 0.724_epoch=0, which already carries
+#   PRICE_REANCHOR and UNCLAMP_DEPTH. The question is NOT "what does TRADES do" --- 0.724
+#   contains our own data-pipeline fixes and cannot stand in for the published model. The
+#   question is:
+#
+#       do the data-pipeline fixes ALONE rescue accelerated sampling, or is the decode-time
+#       intervention still doing independent work?
+#
+#   If these still fail, depth-noise is necessary rather than papering over a data bug ---
+#   which is the argument \S5.3 needs. If they do not fail, that is a surprising result worth
+#   knowing before submission. Either outcome belongs in \S5.2/\S5.3 and MUST NOT be presented
+#   as a replication of TRADES in \S5.1.
+#
+#   An earlier version of this script tried to build a controlled DDPM-100/DDIM-1 replication
+#   pair on ckpt 0.681. That was dropped: the 0.681 on disk (dropout 0.1, lr 2.5e-4, 28 Jul)
+#   is a DIFFERENT checkpoint from the one behind the documented replication (Jul-5 lineage,
+#   not retained) --- they share only a rounded val_ema. No pre-fix checkpoint survives, so a
+#   controlled pre-fix pair is not reconstructable. See analysis/results_51_replication_numbers.md.
 #
 # FLAG HANDLING (important): UNCLAMP_DEPTH/PRICE_REANCHOR are preprocessing+conditioning
 # settings that must MATCH the checkpoint's training. The final-model candidates were trained
@@ -160,18 +174,21 @@ fi
 
 # ============================ PRIORITY 2 ====================================
 if [[ "$ONLY" == "both" || "$ONLY" == "p2" ]]; then
-  echo "########## PRIORITY 2: controlled replication pair ##########"
-  echo "# vanilla DDIM-1 on ckpt 0.681, matched to the existing vanilla DDPM-100 run"
-  echo "# (2015-01-30, 09:30-10:30). Only the sampler differs."
+  echo "########## PRIORITY 2: sampler ablation on the final-model checkpoint ##########"
+  echo "# NOT a replication --- 0.724 carries PRICE_REANCHOR + UNCLAMP_DEPTH (our fixes)."
+  echo "# Asks: do the data fixes alone rescue accelerated sampling, or is depth-noise still needed?"
   echo ""
-  if CK=$(find_ckpt "0.681_epoch=3"); then
-    # NOTE flags OFF: 0.681 predates UNCLAMP_DEPTH/PRICE_REANCHOR, so running it with them
-    # on would mismatch its training-time conditioning.
-    run_cell "p2_ddim1_0681" "$CK" 20150130 "09:30:00" "10:30:00" DDIM 1 off
+  if CK=$(find_ckpt "0.724_epoch=0"); then
+    # flags ON: 0.724 was trained with both fixes, so sim-time conditioning must match.
+    # vanilla decode (no depth-noise / size-reshape / type-decode) isolates the sampler.
+    run_cell "p2_abl_ddim1_vanilla"  "$CK" 20150129 "09:30:00" "10:00:00" DDIM 1  on
+    run_cell "p2_abl_ddim10_vanilla" "$CK" 20150129 "09:30:00" "10:00:00" DDIM 10 on
+    # reference point: same checkpoint/day/window WITH the decode-time fix, so the three
+    # rows form a clean like-for-like ablation table.
+    run_cell "p2_abl_ddim10_fixed"   "$CK" 20150129 "09:30:00" "10:00:00" DDIM 10 on $WINCFG
   else
-    echo "!! checkpoint 0.681_epoch=3 not found on this machine."
-    echo "   It is present on the Mac at data/checkpoints/TRADES/ --- copy it over, then re-run"
-    echo "   with:  bash scripts/long_horizon_and_replication.sh --only p2"
+    echo "!! checkpoint 0.724_epoch=0 not found on this machine."
+    echo "   Copy it into data/checkpoints/TRADES/, then re-run with --only p2"
   fi
   echo ""
 fi
