@@ -1,8 +1,8 @@
 # Long-horizon & overnight paper runs — results folder
 
-*2026-08-07. From the overnight GPU session. Phases P1 (sampler ablation), P2 (two-hour runs) and
-P3 (step-count ablation) completed; P4 (lever) and P5 (seeds) did not — they were the lowest-priority
-tail.*
+*2026-08-07. From the overnight GPU session. All five phases completed: P1 sampler ablation,
+P2 two-hour runs, P3 step-count ablation, P4 book-balancing lever, P5 seed robustness. The single
+exception is the `0.724` seed-32 cell, which did not finish before the window closed.*
 
 ---
 
