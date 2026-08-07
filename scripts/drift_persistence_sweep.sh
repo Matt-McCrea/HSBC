@@ -45,8 +45,20 @@
 #   deficit in the first place.
 #
 # Usage:
-#   bash scripts/drift_persistence_sweep.sh                    # full sweep, 14 cells, ~6.1h
-#   bash scripts/drift_persistence_sweep.sh --quick            # 6 core cells (incl. lever), ~2.6h
+# COST: per-cell wall-clock is driven by the SIMULATED window, not the cell count --- measured at
+#   ~25min for a 30min window, ~78min for 60min, ~156min for 2h. A 14-cell sweep at the 2h window is
+#   ~36h, NOT the ~6h originally estimated. Always run --dry-run first; it now prints the real total.
+#
+#   Recommended for a ~6h budget:
+#     bash scripts/drift_persistence_sweep.sh --window 60 --cells 5     # ~6.5h, VR(60s) reliable
+#
+#   Other forms:
+#     bash scripts/drift_persistence_sweep.sh --dry-run                 # print plan + honest cost
+#     bash scripts/drift_persistence_sweep.sh --window 30 --cells 12    # ~5h, but VR(300s) unusable
+#
+# WINDOW vs MEASUREMENT QUALITY: VR(60s) needs ~25+ non-overlapping minute blocks to be stable, so a
+#   60min window is adequate for it; VR(300s) needs a 2h window to be trustworthy (on a 30min window
+#   real itself reads 1.62 against its true ~1.02). Prefer 60min and read VR(60s) as the headline.
 #   bash scripts/drift_persistence_sweep.sh --window 60        # 60-min cells instead of 120
 #   bash scripts/drift_persistence_sweep.sh --dry-run
 set -uo pipefail
@@ -55,8 +67,12 @@ TICKER="INTC"; DAY="20150129"; SEED="30"
 CKPT_FRAG="0.69_epoch=4"          # the long-horizon winner
 ST="10:00:00"; ET="12:00:00"      # 2h: the horizon where the pathology is measurable
 BASE="--size-reshape --type-decode prior"
-CAP=9000
-QUICK=0; DRY=0
+# Per-cell wall-clock scales with the SIMULATED window, not the cell count: a 2h window costs
+# ~2.6h, a 60min window ~1.3h, a 30min window ~25min. CAP is set from the window below with ~50%
+# headroom so a cell is never killed just short of finishing (which is what happened on the first
+# attempt: cells reached simulated 11:50 of a 12:00 window and were cut off at 98%).
+CAP=""
+QUICK=0; DRY=0; MAXCELLS=0
 OUT_DIR="drift_sweep/$(date +%Y%m%d_%H%M%S)"
 
 while [[ $# -gt 0 ]]; do case "$1" in
@@ -64,7 +80,8 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --dry-run) DRY=1; shift;;
   --ckpt) CKPT_FRAG="$2"; shift 2;;
   --day) DAY="$2"; shift 2;;
-  --window) [[ "$2" == "60" ]] && ET="11:00:00"; shift 2;;
+  --window) case "$2" in 30) ET="10:30:00";; 60) ET="11:00:00";; 120) ET="12:00:00";; esac; shift 2;;
+  --cells) MAXCELLS="$2"; shift 2;;
   --out-dir) OUT_DIR="$2"; shift 2;;
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
 
@@ -99,6 +116,15 @@ EXTRA=(
   "no_type_prior|0.3|0.0|0.995|0"          # drop --type-decode prior (see CELLBASE below)
 )
 [[ "$QUICK" == "0" ]] && CELLS+=("${EXTRA[@]}")
+[[ "$MAXCELLS" -gt 0 ]] && CELLS=("${CELLS[@]:0:$MAXCELLS}")
+
+# minutes of simulated time -> measured wall-clock per cell -> cap with headroom
+case "$ET" in
+  10:30:00) PERCELL=25;  CAP=${CAP:-3600};;
+  11:00:00) PERCELL=78;  CAP=${CAP:-9000};;
+  12:00:00) PERCELL=156; CAP=${CAP:-18000};;
+  *)        PERCELL=156; CAP=${CAP:-18000};;
+esac
 
 if [[ "$DRY" == "1" ]]; then
   echo "ckpt=$CKPT_FRAG  day=$DAY  window=$ST-$ET"
@@ -106,7 +132,9 @@ if [[ "$DRY" == "1" ]]; then
   for c in "${CELLS[@]}"; do IFS='|' read -r n dn dd phi lv <<< "$c"
     printf '%-24s %-12s %-12s %-10s %-7s\n' "$n" "$dn" "$dd" "$phi" \
       "$([[ "$lv" == "1" ]] && echo yes || echo -)"; done
-  echo ""; echo "cells: ${#CELLS[@]}  est: ~$(( ${#CELLS[@]} * 26 ))min"
+  TOT=$(( ${#CELLS[@]} * PERCELL ))
+  echo ""; echo "window $ST-$ET  ->  ~${PERCELL}min/cell  (measured, not guessed)"
+  echo "cells: ${#CELLS[@]}   TOTAL: ~$(( TOT / 60 ))h $(( TOT % 60 ))m   per-cell cap: $(( CAP / 60 ))min"
   exit 0
 fi
 
