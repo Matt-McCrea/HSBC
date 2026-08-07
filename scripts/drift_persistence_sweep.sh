@@ -15,7 +15,13 @@
 #   THE SAME PATHOLOGY IS IN TRADES'S OWN RELEASED OUTPUT (VR60s 0.099 / 0.153 on 0130 / 0129), so
 #   it is inherited from the architecture rather than introduced by our decode-time corrections.
 #
-#   TWO COMPETING HYPOTHESES, which this sweep is built to separate:
+#   ONE INTERVENTION IS ALREADY PROVEN: the book-balancing cancel (--book-target-thick 2.0
+#   --book-cancel-rate 0.5) took VR60s from 0.047 to 0.112 and range from 28 to 32tk on the 2h run
+#   (P4). That was NOT the predicted direction --- it trims whichever side has grown thick, so it
+#   should act as a restoring force. It does not. Lever arms therefore run early, and the headline
+#   question is whether it COMPOUNDS with drift.
+#
+#   TWO FURTHER HYPOTHESES, which this sweep is built to separate:
 #     (a) persistence is the missing ingredient -> --depth-drift with long phi should fix it, and
 #         iid noise should NOT, since independent draws cancel;
 #     (b) volatility buys persistence -> across existing CSVs the high-volatility runs have far
@@ -39,8 +45,8 @@
 #   deficit in the first place.
 #
 # Usage:
-#   bash scripts/drift_persistence_sweep.sh                    # full sweep, 12 cells, ~5.2h
-#   bash scripts/drift_persistence_sweep.sh --quick            # persistence only, ~1.5h
+#   bash scripts/drift_persistence_sweep.sh                    # full sweep, 14 cells, ~6.1h
+#   bash scripts/drift_persistence_sweep.sh --quick            # 6 core cells (incl. lever), ~2.6h
 #   bash scripts/drift_persistence_sweep.sh --window 60        # 60-min cells instead of 120
 #   bash scripts/drift_persistence_sweep.sh --dry-run
 set -uo pipefail
@@ -62,36 +68,44 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --out-dir) OUT_DIR="$2"; shift 2;;
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
 
-# cell name | depth-noise | depth-drift | phi        (empty drift = control)
+# cell name | depth-noise | depth-drift | phi | lever(0/1)
+#
+# Ordered by expected value: the lever arms run early because the book-balancing cancel is the ONLY
+# intervention so far MEASURED to improve persistence (P4: VR60s 0.047 -> 0.112, range 28 -> 32tk),
+# whereas every drift/noise arm is still speculative. If the sweep is cut short, the compounding
+# question is the one worth having answered.
 CELLS=(
-  "control_current|0.3|0.0|0.995"          # what we ship today --- the reference row
-  "phi44s|0.3|0.25|0.9995"                 # persistence sweep, amplitude held
-  "phi111s|0.3|0.25|0.9998"
-  "phi221s|0.3|0.25|0.9999"
-  "tradeoff_phi111s|0.2|0.25|0.9998"       # trade iid noise for drift (1s vol already too high)
+  "control_current|0.3|0.0|0.995|0"        # what we ship today --- the reference row
+  "lever_only|0.3|0.0|0.995|1"             # re-run of the P4 config, in-sweep so it is directly comparable
+  "lever_drift_phi111s|0.3|0.25|0.9998|1"  # *** does the proven lever COMPOUND with drift? ***
+  "phi111s|0.3|0.25|0.9998|0"              # drift alone, mid persistence
+  "phi221s|0.3|0.25|0.9999|0"              # drift alone, long persistence
+  "tradeoff_phi111s|0.2|0.25|0.9998|0"     # trade iid noise for drift (1s vol already too high)
 )
 EXTRA=(
-  "amp_lo_phi111s|0.3|0.15|0.9998"         # amplitude sweep at the best-guess persistence
-  "amp_hi_phi111s|0.3|0.40|0.9998"
-  "tradeoff_hard_phi221s|0.15|0.35|0.9999" # strongest trade-off arm
+  "lever_tradeoff|0.2|0.25|0.9999|1"       # lever + long drift + reduced noise: everything at once
+  "amp_hi_phi111s|0.3|0.40|0.9998|0"       # amplitude sweep at the best-guess persistence
+  "amp_lo_phi111s|0.3|0.15|0.9998|0"
+  "phi44s|0.3|0.25|0.9995|0"               # short-persistence anchor: expected to do little
+  "tradeoff_hard_phi221s|0.15|0.35|0.9999|0"
   # --- noise arms: test the OBSERVATIONAL hypothesis that volatility buys persistence ---
   # Across existing CSVs the high-volatility runs have far better variance ratios
   # (DDPM-100 on 0.681: 1svol 4.54, VR60s 0.835; DDIM-1 on 0.763: 4.93, 0.765) than the
   # low-volatility post-fix ones (1.35-1.95, VR60s 0.05-0.10). That is confounded by
   # checkpoint, so it needs a controlled test rather than an assumption. Theory says iid
   # noise should cancel and NOT buy persistence; the data hints otherwise. Settle it.
-  "noise_hi|0.5|0.0|0.995"
-  "noise_vhi|0.7|0.0|0.995"
-  "noise_hi_drift|0.5|0.25|0.9998"         # both levers together
-  "no_type_prior|0.3|0.0|0.995"            # drop --type-decode prior (see CELLBASE below)
+  "noise_hi|0.5|0.0|0.995|0"
+  "noise_hi_drift|0.5|0.25|0.9998|0"       # noise + drift together
+  "no_type_prior|0.3|0.0|0.995|0"          # drop --type-decode prior (see CELLBASE below)
 )
 [[ "$QUICK" == "0" ]] && CELLS+=("${EXTRA[@]}")
 
 if [[ "$DRY" == "1" ]]; then
   echo "ckpt=$CKPT_FRAG  day=$DAY  window=$ST-$ET"
-  printf '%-24s %-12s %-12s %-10s\n' CELL DEPTH-NOISE DEPTH-DRIFT PHI
-  for c in "${CELLS[@]}"; do IFS='|' read -r n dn dd phi <<< "$c"
-    printf '%-24s %-12s %-12s %-10s\n' "$n" "$dn" "$dd" "$phi"; done
+  printf '%-24s %-12s %-12s %-10s %-7s\n' CELL DEPTH-NOISE DEPTH-DRIFT PHI LEVER
+  for c in "${CELLS[@]}"; do IFS='|' read -r n dn dd phi lv <<< "$c"
+    printf '%-24s %-12s %-12s %-10s %-7s\n' "$n" "$dn" "$dd" "$phi" \
+      "$([[ "$lv" == "1" ]] && echo yes || echo -)"; done
   echo ""; echo "cells: ${#CELLS[@]}  est: ~$(( ${#CELLS[@]} * 26 ))min"
   exit 0
 fi
@@ -124,11 +138,12 @@ REALP="ABIDES/log/market_replay_${TICKER}_$(ymd_dash "$DAY")_${ET//:/-}_${SEED}/
     > "$OUT_DIR/logs/real.txt" 2>&1; }
 
 for c in "${CELLS[@]}"; do
-  IFS='|' read -r NAME DN DD PHI <<< "$c"
+  IFS='|' read -r NAME DN DD PHI LV <<< "$c"
   DONE="$OUT_DIR/logs/.done_${NAME}"
   [[ -f "$DONE" ]] && { echo "   SKIP $NAME"; continue; }
   DRIFTARGS=""
   [[ "$DD" != "0.0" ]] && DRIFTARGS="--depth-drift $DD --depth-drift-phi $PHI"
+  [[ "$LV" == "1" ]] && DRIFTARGS="$DRIFTARGS --book-target-thick 2.0 --book-cancel-rate 0.5"
   # the no_type_prior arm drops --type-decode prior to test whether pinning the type mix to a
   # fixed prior (0.49/0.48/0.03) acts as a restoring force on direction
   CELLBASE="$BASE"
