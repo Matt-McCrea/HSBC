@@ -11,7 +11,17 @@
 #
 #   Our models already have MORE 1-second volatility than real. The deficiency is that the movement
 #   cancels instead of accumulating, which is why the range is half real's despite more jitter.
-#   So the fix is persistence, NOT more variance --- raising --depth-noise would make it worse.
+#
+#   THE SAME PATHOLOGY IS IN TRADES'S OWN RELEASED OUTPUT (VR60s 0.099 / 0.153 on 0130 / 0129), so
+#   it is inherited from the architecture rather than introduced by our decode-time corrections.
+#
+#   TWO COMPETING HYPOTHESES, which this sweep is built to separate:
+#     (a) persistence is the missing ingredient -> --depth-drift with long phi should fix it, and
+#         iid noise should NOT, since independent draws cancel;
+#     (b) volatility buys persistence -> across existing CSVs the high-volatility runs have far
+#         better variance ratios (DDPM-100 on 0.681: 1svol 4.54, VR60s 0.835; DDIM-1 on 0.763:
+#         4.93, 0.765) than the low-volatility post-fix ones (1.35-1.95, VR60s 0.05-0.10).
+#   (b) is confounded by checkpoint, and contradicts the theory behind (a). Both get arms here.
 #
 # THE LEVER: --depth-drift is an AR(1) directional bias on the depth channel that ticks PER ORDER
 #   (event time). At the observed ~45 events/s, the default phi=0.995 gives only ~4.4s of
@@ -20,16 +30,16 @@
 #
 #     phi=0.9995 -> ~44 s      phi=0.9998 -> ~111 s      phi=0.9999 -> ~221 s
 #
-# THE DESIGN: sweep persistence FIRST (it sets which timescale is fixed), amplitude second. Also
-#   trade iid noise for persistent drift rather than stacking them, since 1s volatility is already
-#   above real --- hence the reduced --depth-noise in the trade-off arm.
+# THE DESIGN: sweep persistence FIRST (it sets which timescale is fixed), amplitude second; add
+#   trade-off arms that swap iid noise for drift, raw high-noise arms to test hypothesis (b), and a
+#   no-type-prior arm testing whether pinning the type mix to a fixed prior restores direction.
 #
 # SCORED ON: VR(60s) and VR(300s) -> 1.0, while ret1s_std stays ~1.2-1.5bp and range grows toward
 #   56tk. NOT uniq_mid alone --- that is the proxy that misled us into reading this as an activity
 #   deficit in the first place.
 #
 # Usage:
-#   bash scripts/drift_persistence_sweep.sh                    # full sweep, ~3.5h
+#   bash scripts/drift_persistence_sweep.sh                    # full sweep, 12 cells, ~5.2h
 #   bash scripts/drift_persistence_sweep.sh --quick            # persistence only, ~1.5h
 #   bash scripts/drift_persistence_sweep.sh --window 60        # 60-min cells instead of 120
 #   bash scripts/drift_persistence_sweep.sh --dry-run
@@ -64,6 +74,16 @@ EXTRA=(
   "amp_lo_phi111s|0.3|0.15|0.9998"         # amplitude sweep at the best-guess persistence
   "amp_hi_phi111s|0.3|0.40|0.9998"
   "tradeoff_hard_phi221s|0.15|0.35|0.9999" # strongest trade-off arm
+  # --- noise arms: test the OBSERVATIONAL hypothesis that volatility buys persistence ---
+  # Across existing CSVs the high-volatility runs have far better variance ratios
+  # (DDPM-100 on 0.681: 1svol 4.54, VR60s 0.835; DDIM-1 on 0.763: 4.93, 0.765) than the
+  # low-volatility post-fix ones (1.35-1.95, VR60s 0.05-0.10). That is confounded by
+  # checkpoint, so it needs a controlled test rather than an assumption. Theory says iid
+  # noise should cancel and NOT buy persistence; the data hints otherwise. Settle it.
+  "noise_hi|0.5|0.0|0.995"
+  "noise_vhi|0.7|0.0|0.995"
+  "noise_hi_drift|0.5|0.25|0.9998"         # both levers together
+  "no_type_prior|0.3|0.0|0.995"            # drop --type-decode prior (see CELLBASE below)
 )
 [[ "$QUICK" == "0" ]] && CELLS+=("${EXTRA[@]}")
 
@@ -109,11 +129,15 @@ for c in "${CELLS[@]}"; do
   [[ -f "$DONE" ]] && { echo "   SKIP $NAME"; continue; }
   DRIFTARGS=""
   [[ "$DD" != "0.0" ]] && DRIFTARGS="--depth-drift $DD --depth-drift-phi $PHI"
+  # the no_type_prior arm drops --type-decode prior to test whether pinning the type mix to a
+  # fixed prior (0.49/0.48/0.03) acts as a restoring force on direction
+  CELLBASE="$BASE"
+  [[ "$NAME" == no_type_prior* ]] && CELLBASE="--size-reshape"
   echo "-- $NAME   (dn=$DN drift=$DD phi=$PHI)"
   T0=$(date +%s)
   if ! timeout -k 30 "$CAP" python -u ABIDES/abides.py -c world_agent_sim -t "$TICKER" -date "$DAY" \
         -st "$ST" -et "$ET" -d True -m TRADES -type DDIM -nsteps 10 -eta 0.0 \
-        --ckpt-path "$CK" -seed "$SEED" --depth-noise "$DN" $BASE $DRIFTARGS \
+        --ckpt-path "$CK" -seed "$SEED" --depth-noise "$DN" $CELLBASE $DRIFTARGS \
         > "$OUT_DIR/logs/${NAME}.txt" 2>&1; then
     echo "   FAILED/TIMEOUT"; echo "| $NAME | $DN | $DD | $PHI | FAILED | | | | |" >> "$SUM"; continue
   fi
