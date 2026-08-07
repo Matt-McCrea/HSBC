@@ -60,6 +60,44 @@ def state_to_index(obs: dict) -> int:
         tuple(_feature_index(obs, f) for f in STATE_FEATURES), STATE_DIMS))
 
 
+def inventory_penalty(inv_remaining_frac, lam):
+    """Almgren-Chriss style running risk penalty: -lambda * x_t^2, charged at every
+    step on the fraction of the parent order still held.
+
+    Two reasons this is worth having beyond modelling realism:
+
+    1. It is DENSE and DETERMINISTIC. The unshaped reward is zero for nine steps and
+       then one terminal payment with sigma ~400 raw units against an action spread of
+       ~140 -- which is why the greedy policy churns. Inventory is known exactly, so
+       this adds learning signal at every step with ZERO added variance.
+    2. It is the risk term in Almgren-Chriss (minimise E[cost] + lambda*Var[cost],
+       with the variance implemented as a running penalty on held inventory), so
+       sweeping lambda traces a cost/risk frontier directly comparable to the
+       analytical benchmark.
+
+    lam is in the same units as the reward (raw LOBSTER price ticks, per share, since
+    shortfall is divided by Q). Holding the FULL order for one step costs lam. Under a
+    linear liquidation the total over 10 steps is ~3.85*lam, so against a typical
+    |shortfall| of 100-400 a lam of roughly 10-100 makes the penalty comparable to
+    execution cost -- that is the range worth sweeping.
+
+    IMPORTANT: this is applied at LEARNING time only. The environment always reports
+    true implementation shortfall, so evaluation against TWAP stays comparable and a
+    shaped agent cannot flatter itself by changing its own scoring.
+    """
+    if not lam:
+        return 0.0
+    return -float(lam) * float(inv_remaining_frac) ** 2
+
+
+def inventory_risk(trajectory):
+    """Sum of x_t^2 over a logged episode -- the Almgren-Chriss risk proxy, and the
+    x-axis of a cost/risk frontier. With the terminal sweep forcing full completion,
+    residual inventory is always zero, so risk shows up as how SLOWLY inventory was
+    drawn down rather than as anything left over."""
+    return float(sum(float(s["inv_rem"]) ** 2 for s in (trajectory or [])))
+
+
 class QLearningPolicy:
 
     # Defaults sized for the ~100-200 episode budget the measured ~460s/episode allows

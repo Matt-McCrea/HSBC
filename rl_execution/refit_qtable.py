@@ -29,7 +29,8 @@ import argparse
 import numpy as np
 
 from rl_execution.logging_utils import read_episodes
-from rl_execution.qlearning import N_ACTIONS, N_STATES, QLearningPolicy, state_to_index
+from rl_execution.qlearning import (N_ACTIONS, N_STATES, QLearningPolicy, inventory_penalty,
+                                     inventory_risk, state_to_index)
 
 
 def _obs_from_step(step):
@@ -42,7 +43,8 @@ def _obs_from_step(step):
     }
 
 
-def refit(records, alpha_mode="visit-count", alpha=0.3, gamma=1.0, drift_adjust=False):
+def refit(records, alpha_mode="visit-count", alpha=0.3, gamma=1.0, drift_adjust=False,
+          inventory_lambda=0.0):
     q = np.zeros((N_STATES, N_ACTIONS), dtype=np.float64)
     visits = np.zeros((N_STATES, N_ACTIONS), dtype=np.int64)
     n_eps = n_steps = 0
@@ -71,6 +73,9 @@ def refit(records, alpha_mode="visit-count", alpha=0.3, gamma=1.0, drift_adjust=
                 # Sell-side sign convention matches _compute_shortfall: a rising market
                 # (positive drift) lowers a seller's shortfall, hence raises the reward.
                 r = r - (drift_raw if str(rec.get("side")) == "SELL" else -drift_raw)
+            # Shaping is applied HERE, at fit time, never in the log -- which is what lets
+            # lambda be re-swept over already-simulated episodes at no GPU cost.
+            r += inventory_penalty(step["inv_rem"], inventory_lambda)
 
             visits[s, a] += 1
             target = r
@@ -114,6 +119,39 @@ def stability(records, n_points=5, **kw):
     return rows
 
 
+def penalty_sweep(records, lambdas, **kw):
+    """Refit once per lambda over the SAME episodes and report how the policy changes.
+
+    What this can and cannot tell you matters. It produces POLICIES for free -- no
+    simulation -- so it is the right way to screen which lambdas are worth GPU time.
+    It cannot tell you the resulting shortfall: measuring that requires running the
+    policy in the market, because a different policy produces different fills. So the
+    workflow is: sweep here to pick two or three lambdas, then spend GPU measuring
+    those, and plot the cost/risk frontier from the measured runs.
+    """
+    usable = [r for r in records if r.get("trajectory")]
+    rows = []
+    baseline = None
+    for lam in lambdas:
+        q, visits, n_eps, _, _ = refit(usable, inventory_lambda=lam, **kw)
+        visited = (visits > 0).any(axis=1)
+        greedy = q.argmax(axis=1)
+        if baseline is None:
+            baseline = (greedy.copy(), visited.copy())
+            changed = None
+        else:
+            both = visited & baseline[1]
+            changed = (int((greedy[both] != baseline[0][both]).sum()), int(both.sum()))
+        rows.append({
+            "lam": lam,
+            "mean_action": float(greedy[visited].mean()) if visited.any() else float("nan"),
+            "changed_vs_lam0": changed,
+            "n_states": int(visited.sum()),
+        })
+    observed_risk = [inventory_risk(r["trajectory"]) for r in usable]
+    return rows, observed_risk
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("log", help="training .jsonl containing per-step trajectories")
@@ -123,6 +161,10 @@ def main():
     parser.add_argument("--alpha-mode", choices=["visit-count", "fixed"], default="visit-count")
     parser.add_argument("--alpha", type=float, default=0.3, help="used only with --alpha-mode fixed")
     parser.add_argument("--gamma", type=float, default=1.0)
+    parser.add_argument("--inventory-penalty", type=float, default=0.0,
+                        help="Almgren-Chriss running risk penalty lambda*x_t^2 per step")
+    parser.add_argument("--penalty-sweep", default=None,
+                        help="comma-separated lambdas to screen offline, e.g. 0,10,25,50,100")
     parser.add_argument("--drift-adjust", action="store_true",
                         help="subtract each episode's market drift from its terminal reward")
     parser.add_argument("--out", default=None, help="write the refit Q-table to this .npz")
@@ -131,7 +173,8 @@ def main():
     records = read_episodes(args.log)
     q, visits, n_eps, n_steps, skipped = refit(
         records, alpha_mode=args.alpha_mode, alpha=args.alpha,
-        gamma=args.gamma, drift_adjust=args.drift_adjust)
+        gamma=args.gamma, drift_adjust=args.drift_adjust,
+        inventory_lambda=args.inventory_penalty)
 
     print("=" * 74)
     print(f"REFIT from {args.log}")
@@ -159,6 +202,25 @@ def main():
     print(f"differs from TWAP : {differs}/{n_visited} ({differs / n_visited:.0%})")
     spread = q[visited].max(axis=1) - q[visited].min(axis=1)
     print(f"Q-value spread    : median={np.median(spread):.2f}  max={spread.max():.2f}")
+
+    if args.penalty_sweep:
+        lambdas = [float(x) for x in args.penalty_sweep.split(",")]
+        rows, observed_risk = penalty_sweep(
+            records, lambdas, alpha_mode=args.alpha_mode, alpha=args.alpha,
+            gamma=args.gamma, drift_adjust=args.drift_adjust)
+        print("\nINVENTORY-PENALTY SWEEP (policies only -- shortfall needs a live run)")
+        print(f"{'lambda':>9}  {'mean action':>12}  {'states':>7}  changed vs lambda=0")
+        for r in rows:
+            ch = "-" if r["changed_vs_lam0"] is None else f"{r['changed_vs_lam0'][0]}/{r['changed_vs_lam0'][1]}"
+            print(f"{r['lam']:>9.1f}  {r['mean_action']:>12.2f}  {r['n_states']:>7d}  {ch:>18}")
+        print("  mean action rising with lambda = the penalty is pushing the agent to")
+        print("  liquidate faster, which is what a risk term should do.")
+        if observed_risk:
+            print(f"\n  observed inventory risk (sum x_t^2) over logged episodes: "
+                  f"median={np.median(observed_risk):.2f}  "
+                  f"[{np.min(observed_risk):.2f}, {np.max(observed_risk):.2f}]")
+            print("  -> the x-axis of the cost/risk frontier; pair it with measured shortfall")
+            print("     from a live run at each lambda to plot the frontier.")
 
     if args.stability:
         rows = stability(records, alpha_mode=args.alpha_mode, alpha=args.alpha,

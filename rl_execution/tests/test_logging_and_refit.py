@@ -20,10 +20,24 @@ from rl_execution.benchmark import run_benchmark
 from rl_execution.evaluate import evaluate_policy
 from rl_execution.logging_utils import JsonlLogger, read_episodes
 from rl_execution.qlearning import N_ACTIONS, QLearningPolicy, TWAPPolicy
-from rl_execution.refit_qtable import refit
+from rl_execution.refit_qtable import penalty_sweep, refit
 from rl_execution.train import train
 
 N_DECISIONS = 10
+
+
+# Participation multipliers from execution_agent.ACTION_LEVELS, as a fraction of the
+# Q/10 base slice: inventory must respond to the action, or an inventory penalty has
+# nothing to differentiate and the fixture silently cannot test it.
+PARTICIPATION = [0.5, 1.0, 1.0, 1.5, 2.0]
+
+# Aggression costs money (market impact) but sheds inventory faster. That tension IS the
+# Almgren-Chriss trade-off, so a fixture without it cannot exhibit a cost/risk frontier:
+# with cost independent of action, nothing distinguishes the actions on cost grounds and
+# any apparent lambda response is noise. Sized well above IMPACT_NOISE so the signal is
+# resolvable at the few-visits-per-entry counts these tests run at.
+IMPACT_PER_PARTICIPATION = 400.0
+IMPACT_NOISE = 60.0
 
 
 class FakeEnv:
@@ -34,11 +48,12 @@ class FakeEnv:
         self.rng = np.random.RandomState(seed)
         self.p_arrival = 340000.0
         self._i = 0
+        self._inv = 1.0
 
     def _obs(self):
         return {
             "time_remaining_frac": (self.n - self._i) / self.n,
-            "inventory_remaining_frac": max(0.0, 1.0 - self._i / self.n),
+            "inventory_remaining_frac": max(0.0, self._inv),
             "spread_bucket": int(self.rng.randint(0, 4)),
             "vol_bucket": int(self.rng.randint(0, 3)),
             "ofi_bucket": int(self.rng.randint(0, 3)),
@@ -58,14 +73,21 @@ class FakeEnv:
 
     def reset(self, **kwargs):
         self._i = 0
+        self._inv = 1.0
+        self._participation = []
         return self._obs(), self._info()
 
     def step(self, action):
         self._i += 1
+        self._participation.append(PARTICIPATION[int(action)])
+        self._inv = max(0.0, self._inv - PARTICIPATION[int(action)] / self.n)
         done = self._i >= self.n
+        if done:
+            self._inv = 0.0  # terminal sweep completes the parent order
         if not done:
             return self._obs(), 0.0, False, self._info()
-        shortfall = float(self.rng.normal(-100, 300))
+        impact = IMPACT_PER_PARTICIPATION * float(np.mean(self._participation))
+        shortfall = impact + float(self.rng.normal(0, IMPACT_NOISE))
         p_final = self.p_arrival * (1.0 + self.rng.normal(0.0005, 0.001))
         reward = -shortfall
         return self._obs(), reward, True, self._info(shortfall=shortfall, p_final=p_final)
@@ -154,6 +176,56 @@ def test_refit_reproduces_a_policy_offline(tmp_path):
     q_adj, *_ = refit(recs, alpha_mode="visit-count", drift_adjust=True)
     assert np.isfinite(q_adj).all()
     assert not np.allclose(q, q_adj), "drift adjustment had no effect on the fitted values"
+
+
+def test_inventory_penalty_pushes_toward_faster_liquidation(tmp_path):
+    """The point of the Almgren-Chriss risk term: charging for held inventory should
+    move the greedy policy toward more aggressive actions. Verified on the SAME logged
+    episodes at several lambdas -- which is exactly the free offline screen the sweep
+    exists to provide."""
+    env = FakeEnv(seed=5)
+    policy = QLearningPolicy(random_state=np.random.RandomState(0), alpha_mode="visit-count")
+    log = tmp_path / "train.jsonl"
+    train(env, policy, n_episodes=60, checkpoint_path=str(tmp_path / "q.npz"),
+          checkpoint_every=999, out_path=str(log), side="SELL")
+
+    recs = read_episodes(str(log))
+    rows, observed_risk = penalty_sweep(recs, [0.0, 100.0, 500.0], alpha_mode="visit-count")
+    assert len(rows) == 3
+    assert all(np.isfinite(r["mean_action"]) for r in rows)
+    # a penalty must move the policy away from where lambda=0 put it
+    assert rows[-1]["changed_vs_lam0"][0] > 0, "inventory penalty had no effect on the policy"
+    # ... and specifically toward aggression: with impact making aggression costly,
+    # lambda=0 should favour passive execution and a large lambda should override that.
+    assert rows[-1]["mean_action"] > rows[0]["mean_action"] + 0.5, (
+        f"penalising held inventory should favour faster liquidation; "
+        f"got {rows[0]['mean_action']:.2f} at lambda=0 vs {rows[-1]['mean_action']:.2f} at lambda=500")
+    assert observed_risk and all(r >= 0 for r in observed_risk)
+
+
+@pytest.mark.parametrize("lam", [0.0, 500.0])
+def test_inventory_penalty_is_not_baked_into_the_log(tmp_path, lam):
+    """Shaping must happen at fit time only -- if a live run's penalty leaked into the
+    logged rewards, lambda would be frozen into the data and could not be re-swept.
+
+    Comparing two runs' reward sequences would NOT show this: a shaped agent takes
+    different actions, and with impact in the fixture that legitimately changes the
+    shortfall. The invariant that isolates a leak is that the logged terminal reward
+    still equals the true (unshaped) reward implied by the reported shortfall, and
+    that intermediate steps stay at exactly zero.
+    """
+    log = tmp_path / f"lam{lam}.jsonl"
+    train(FakeEnv(seed=9), QLearningPolicy(random_state=np.random.RandomState(0)),
+          n_episodes=4, checkpoint_path=str(tmp_path / f"q{lam}.npz"),
+          checkpoint_every=999, out_path=str(log), side="SELL",
+          inventory_penalty_lambda=lam)
+
+    for rec in read_episodes(str(log)):
+        traj = rec["trajectory"]
+        assert traj[-1]["r"] == pytest.approx(-rec["shortfall"]), \
+            "terminal reward no longer matches true shortfall -- shaping leaked into the log"
+        assert all(s["r"] == 0.0 for s in traj[:-1]), \
+            "intermediate rewards are non-zero -- the per-step penalty leaked into the log"
 
 
 def test_refit_handles_logs_without_trajectories(tmp_path):
