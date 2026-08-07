@@ -12,6 +12,7 @@ tables/
   lobbench_theirs_vs_ours.md   <- our LOB-Bench scoring, theirs vs ours
   flow_composition_source.md   <- flow mix across four stock-days
   ddim1_collapse_numbers.md    <- the single-step collapse, quantified
+  like_for_like_comparison.md  <- CONSOLIDATED: stats + LOB-Bench, theirs vs ours, same day
 lob_bench/                 <- raw per-metric scores (CSV)
 data/                      <- their released CSVs, timestamps repaired
 ```
@@ -54,6 +55,9 @@ market period. Row counts in each match to within a few bars.
 
 ## Tables
 
+- **`tables/like_for_like_comparison.md`** — **the consolidated replication table**: market stats
+  (volatility, range, unique mids, flow mix, variance ratio) *and* LOB-Bench, theirs vs ours, same
+  instrument and day. Start here for §5.1's comparison.
 - **`tables/paper_reported_numbers.md`** — **TRADES's own published results**, extracted from the
   paper: their Table 1 (predictive score vs IABS/CGAN/market replay), Table 2 (DDPM-100 vs DDIM-1 —
   the two reference points), Table 3 (ablations), PCA coverage, and their full experimental setup.
