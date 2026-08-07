@@ -127,6 +127,25 @@ the training pipeline improved.
 
 ---
 
+## Variance-ratio analysis — read this before quoting the activity numbers
+
+`variance_ratio_analysis.md`
+
+The two-hour traces look flat because the models **mean-revert violently**: VR(60s) = 0.047 (SS e4)
+and 0.098 (0.724) against real's 0.931. Both have *more* 1-second volatility than real yet half the
+price range — the movement cancels instead of accumulating.
+
+Three things in there that matter:
+
+- **TRADES's own released output has the same pathology** (VR(60s) 0.099 / 0.153), so it is inherited
+  from the architecture rather than introduced here.
+- **The book-balancing lever improves persistence** (VR(60s) 0.047 → 0.112, range 28 → 32 tk) —
+  the opposite of what was predicted, since it is a mean-reverting mechanism by design. P4 result.
+- **Seeds are very stable** (VR within 0.04 across three seeds), so the pathology is systematic, not
+  noise. P5 result.
+
+Next run: `scripts/drift_persistence_sweep.sh`, 12 cells, ~5.2 h.
+
 ## Files
 
 | File | Shows |
@@ -142,10 +161,9 @@ the training pipeline improved.
 Raw scores: `lob_bench_paper/longhorizon_0129/`, `lob_bench_paper/stepcount_0130/`.
 Source CSVs: `ABIDES/log/paper_runs_downloaded/`.
 
-## Not obtained overnight
+## Overnight completion
 
-- **P4** — long-horizon *with* the book-balancing lever. Still unknown whether the shipped model
-  needs it; the lever was validated at 90 min on `0.627` only.
-- **P5** — seed robustness on the final models (exists for `0.627` only).
-
-Both are ~1.4 h each if a later session allows.
+All five phases landed. **P4** (long-horizon with the book-balancing lever) and **P5** (seed
+robustness) both completed and are analysed in `variance_ratio_analysis.md`. The only gap is the
+`0.724` seed-32 cell, which did not finish before the window closed — immaterial, since the other
+five seed cells agree closely.
