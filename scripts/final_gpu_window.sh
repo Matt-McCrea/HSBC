@@ -53,6 +53,7 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --ckpt) CKPT_FRAG="$2"; shift 2;;
   --days) DAYS=($2); shift 2;;
   --now) SKIP_WAIT=1; shift;;           # skip the sweep entirely, start DDPM immediately
+  --cap-secs) CAP_SECS="$2"; shift 2;;  # hard kill per day; also the INITIAL headroom estimate
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
 
 DEADLINE_EPOCH=$(date -d "today $DEADLINE" +%s 2>/dev/null || date -j -f "%Y-%m-%d %H:%M" "$(date +%F) $DEADLINE" +%s)
@@ -119,11 +120,19 @@ PY
 write_status () { { echo "=== DDPM-100 MONTH --- $(date '+%F %T') ==="; echo "$1"
     echo "ckpt $(basename "$CK")  cap ${CAP_SECS}s  deadline $DEADLINE"; echo ""; cat "$PROG"; } > "$STATUS"; }
 
-DONE_N=0
+DONE_N=0; MAXSECS=0
 for D in "${DAYS[@]}"; do
   REMAIN=$(( DEADLINE_EPOCH - $(date +%s) ))
-  if [[ "$REMAIN" -lt "$CAP_SECS" ]]; then
-    echo "  -- deadline: ${REMAIN}s left < ${CAP_SECS}s cap, stopping before $D" | tee -a "$PROG"
+  # Headroom must come from MEASURED day times, not the static cap. The cap is sized for the
+  # worst case and is a kill-switch; using it as the scheduling threshold reserves far more
+  # time than a day actually needs and silently drops days that would have fitted. (This cost
+  # 5 days of a 20-day month on 2026-08-08: cap 6000s against a real 1350s/day, so it refused
+  # to start a 22-minute job with 91 minutes left.) Once two days have completed, require
+  # 1.25x the slowest observed instead.
+  NEED=$CAP_SECS
+  [[ "$DONE_N" -ge 2 && "$MAXSECS" -gt 0 ]] && NEED=$(( MAXSECS * 5 / 4 ))
+  if [[ "$REMAIN" -lt "$NEED" ]]; then
+    echo "  -- deadline: ${REMAIN}s left < ${NEED}s needed (slowest day ${MAXSECS}s), stopping before $D" | tee -a "$PROG"
     write_status "STOPPED at deadline before $D"; break
   fi
   write_status "running $D  (${DONE_N} days done, ${REMAIN}s left)"
@@ -135,6 +144,7 @@ for D in "${DAYS[@]}"; do
     SECS=$(( $(date +%s) - T0 )); CSV=$(grep -oE '/[^ ]+processed_orders\.csv' "$LOGF" | tail -1)
     R="  $D  OK  (${SECS}s)"; [[ -n "$CSV" && -f "$CSV" ]] && R="$R   $(movemetric "$CSV")"
     echo "$R" | tee -a "$PROG"; echo "$CSV" >> "$OUT_DIR/csv_list.txt"; DONE_N=$((DONE_N+1))
+    [[ "$SECS" -gt "$MAXSECS" ]] && MAXSECS=$SECS   # feeds the adaptive deadline headroom
   else
     RC=$?; SECS=$(( $(date +%s) - T0 ))
     [[ $RC -eq 124 || $RC -eq 137 ]] && M="TIMEOUT" || M="ERROR rc=$RC"
