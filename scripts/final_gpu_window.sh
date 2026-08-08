@@ -56,7 +56,15 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --cap-secs) CAP_SECS="$2"; shift 2;;  # hard kill per day; also the INITIAL headroom estimate
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
 
-DEADLINE_EPOCH=$(date -d "today $DEADLINE" +%s 2>/dev/null || date -j -f "%Y-%m-%d %H:%M" "$(date +%F) $DEADLINE" +%s)
+# --deadline none: run until the system takes the GPU away. Safe here because every day writes
+# its CSV and progress row on completion, so being killed mid-day costs only the day in flight.
+# --cap-secs 0: no per-day timeout either. The one thing this gives up is protection against a
+# hung day, which would then block every remaining day rather than being cut loose.
+if [[ "$DEADLINE" == "none" ]]; then
+  DEADLINE_EPOCH=0
+else
+  DEADLINE_EPOCH=$(date -d "today $DEADLINE" +%s 2>/dev/null || date -j -f "%Y-%m-%d %H:%M" "$(date +%F) $DEADLINE" +%s)
+fi
 
 echo "=== final GPU window ==="
 echo "handover after sweep cell : $CUT_AFTER   (--now to skip)"
@@ -131,14 +139,15 @@ for D in "${DAYS[@]}"; do
   # 1.25x the slowest observed instead.
   NEED=$CAP_SECS
   [[ "$DONE_N" -ge 2 && "$MAXSECS" -gt 0 ]] && NEED=$(( MAXSECS * 5 / 4 ))
-  if [[ "$REMAIN" -lt "$NEED" ]]; then
+  if [[ "$DEADLINE_EPOCH" -gt 0 && "$REMAIN" -lt "$NEED" ]]; then
     echo "  -- deadline: ${REMAIN}s left < ${NEED}s needed (slowest day ${MAXSECS}s), stopping before $D" | tee -a "$PROG"
     write_status "STOPPED at deadline before $D"; break
   fi
   write_status "running $D  (${DONE_N} days done, ${REMAIN}s left)"
   echo "[$(date +%T)] -- $D" ; T0=$(date +%s)
   LOGF="$OUT_DIR/logs/${D}.txt"
-  if timeout -k 15 "$CAP_SECS" python -u ABIDES/abides.py -c world_agent_sim -t "$TICKER" -date "$D" \
+  TO=(); [[ "$CAP_SECS" -gt 0 ]] && TO=(timeout -k 15 "$CAP_SECS")
+  if "${TO[@]}" python -u ABIDES/abides.py -c world_agent_sim -t "$TICKER" -date "$D" \
         -st "$ST" -et "$ET" -d True -m TRADES -type DDPM -nsteps 100 -eta 0.0 \
         --ckpt-path "$CK" -seed "$SEED" $BASE > "$LOGF" 2>&1; then
     SECS=$(( $(date +%s) - T0 )); CSV=$(grep -oE '/[^ ]+processed_orders\.csv' "$LOGF" | tail -1)
