@@ -146,8 +146,12 @@ if [[ "$AMP" == "NONE" ]]; then
   echo "The drift knob does not earn a place in the final config. That is a result, not a failure:"
   echo "the current config is ALREADY validated across 20 days, so the final model stands as-is"
   echo "and the sweep becomes a quantified diagnostic in the write-up rather than a fix."
-  echo "Not burning the remaining window re-validating something that needs no re-validation."
-  exit 0
+  echo ""
+  # Do not leave the last GPU window idle. Nothing more is needed to SELECT the model, so spend
+  # the remaining hours on the thinnest claim in the write-up instead: '10 steps beat 100' rests
+  # on a single day (0130, 0.447 vs 0.575) while every other headline number is a 20-day figure.
+  echo "=== falling through to DDPM-100 days (deadline $DEADLINE) ==="
+  exec bash scripts/final_gpu_window.sh --now --deadline "$DEADLINE"
 fi
 
 if [[ "$CHECK" == "1" ]]; then
