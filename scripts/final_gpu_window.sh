@@ -42,10 +42,15 @@ BASE="--depth-noise 0.3 --size-reshape --type-decode prior"
 POLL=120
 SKIP_WAIT=0
 
-# 0129/0130 first: both have an existing DDIM-10 comparison AND TRADES's own released output,
-# so if the window closes early the days we DO have are the most useful ones.
-DAYS=(20150129 20150130 20150107 20150102 20150105 20150108 20150109 20150112 20150113 20150114
-      20150115 20150116 20150120 20150121 20150122 20150123 20150126 20150127 20150128 20150106)
+# The five days still outstanding after the 2026-08-08 run. The other fifteen completed and are
+# under ddpm_month/<earlier timestamp>/ --- do not re-run them, tar both directories when pulling.
+DAYS=(20150123 20150126 20150127 20150128 20150106)
+
+# Full month, for when this is next run from scratch. 0129/0130 lead because both have an
+# existing DDIM-10 comparison AND TRADES's own released output, so an early cutoff still leaves
+# the most useful days in hand:
+#   20150129 20150130 20150107 20150102 20150105 20150108 20150109 20150112 20150113 20150114
+#   20150115 20150116 20150120 20150121 20150122 20150123 20150126 20150127 20150128 20150106
 
 while [[ $# -gt 0 ]]; do case "$1" in
   --cut-after) CUT_AFTER="$2"; shift 2;;
