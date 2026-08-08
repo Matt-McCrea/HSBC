@@ -34,7 +34,7 @@ CKPT_FRAG="0.69_epoch=4"     # SS epoch 4, the current lean. --ckpt to override.
 PHI="0.9998"
 TICKER="INTC"; ST="09:30:00"; ET="10:00:00"; SEED="30"
 BASE="--depth-noise 0.3 --size-reshape --type-decode prior"
-POLL=120; FORCE_AMP=""
+POLL=120; FORCE_AMP=""; CHECK=0
 SWEEP_REAL="ABIDES/log/market_replay_INTC_2015-01-29_11-00-00_30/processed_orders.csv"
 
 DAYS=(20150107 20150129 20150102 20150105 20150106 20150108 20150109 20150112 20150113 20150114
@@ -45,6 +45,8 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --deadline) DEADLINE="$2"; shift 2;;
   --ckpt) CKPT_FRAG="$2"; shift 2;;
   --amp) FORCE_AMP="$2"; shift 2;;        # skip selection, use this amplitude
+  --check) CHECK=1; shift;;               # score whatever cells exist NOW, print, exit. Safe:
+                                          # does not wait, does not kill the sweep, runs nothing.
   --days) DAYS=($2); shift 2;;
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
 
@@ -54,7 +56,7 @@ echo "=== finalise selected model ==="
 echo "ckpt: $CKPT_FRAG   phi: $PHI   deadline: $DEADLINE"
 
 # ---- phase 1: wait for enough sweep cells ----
-if [[ -z "$FORCE_AMP" ]]; then
+if [[ -z "$FORCE_AMP" && "$CHECK" == "0" ]]; then
   while true; do
     N=$(ls drift_sweep/latest/logs/.done_amp* 2>/dev/null | wc -l | tr -d ' ')
     [[ "$N" -ge "$WAIT_CELLS" ]] && { echo "[$(date +%T)] $N sweep cells done --- selecting"; break; }
@@ -92,16 +94,26 @@ def stats(s):
 try:
     rv, rr, rvr = stats(series(realp))
 except Exception as e:
-    sys.stderr.write("real reference unreadable: %s\n" % e); print(""); raise SystemExit
-best=None
-for f in sorted(glob.glob("drift_sweep/latest/logs/.csv_amp*")):
+    print("ERROR:real reference unreadable (%s): %s" % (realp, e)); raise SystemExit(0)
+cands=sorted(glob.glob("drift_sweep/latest/logs/.csv_amp*"))
+if not cands:
+    print("ERROR:no .csv_amp* sentinels under drift_sweep/latest/logs --- "
+          "is the running sweep the --plan amplitude one?"); raise SystemExit(0)
+best=None; seen=0
+for f in cands:
     name=os.path.basename(f).replace(".csv_","")
     if "lever" in name: continue                      # validate the simple config first
-    csv=open(f).read().strip()
-    if not csv or not os.path.exists(csv): continue
-    try: v, rng, q60 = stats(series(csv))
-    except Exception: continue
     amp=name.replace("amp","")
+    try: float(amp)                                   # guard against stale non-numeric cell names
+    except ValueError:
+        sys.stderr.write("  skip %s (cell name is not an amplitude)\n" % name); continue
+    csv=open(f).read().strip()
+    if not csv or not os.path.exists(csv):
+        sys.stderr.write("  skip %s (csv missing: %s)\n" % (name, csv or "<empty>")); continue
+    try: v, rng, q60 = stats(series(csv))
+    except Exception as e:
+        sys.stderr.write("  skip %s (unreadable: %s)\n" % (name, e)); continue
+    seen+=1
     # guards: clearly fixed the pathology, did not overshoot into trending, did not blow up
     # range or volatility. Deliberately generous --- a marginal cell is still worth validating.
     ok = (0.45 <= q60 <= 1.80) and (rng <= 2.0*rr) and (v <= 2.2)
@@ -110,18 +122,36 @@ for f in sorted(glob.glob("drift_sweep/latest/logs/.csv_amp*")):
         score=abs(np.log(q60/rvr)) if q60>0 and rvr>0 else 9e9
         if best is None or score<best[0]: best=(score,amp)
 sys.stderr.write("real: vol=%.2f range=%.0f VR60=%.3f\n" % (rv,rr,rvr))
-print(best[1] if best else "")
+if best: print(best[1])
+elif seen: print("NONE")                              # cells scored, none passed --- a real answer
+else: print("ERROR:no amplitude cell could be scored (see skip reasons above)")
 PY
 )
 fi
 
-if [[ -z "$AMP" ]]; then
+# distinguish "no cell passed" (a result) from "the selector broke" (must not be read as a result)
+if [[ -z "$AMP" || "$AMP" == ERROR:* ]]; then
+  echo ""
+  echo "!! SELECTION FAILED --- ${AMP:-selector produced no output at all}"
+  echo "!! This is NOT 'no amplitude worked'. Nothing has been validated and the GPU is now idle."
+  echo "!! Inspect:  ls -la drift_sweep/latest/logs/.csv_amp* ; cat drift_sweep/latest/logs/.csv_amp0.08"
+  echo "!! Then re-run with the amplitude chosen by hand, e.g.:"
+  echo "!!   nohup bash scripts/finalise_selected_model.sh --amp 0.08 > finalise2.log 2>&1 &"
+  exit 1
+fi
+
+if [[ "$AMP" == "NONE" ]]; then
   echo ""
   echo "=== NO AMPLITUDE CLEARED THE GUARDS ==="
   echo "The drift knob does not earn a place in the final config. That is a result, not a failure:"
   echo "the current config is ALREADY validated across 20 days, so the final model stands as-is"
   echo "and the sweep becomes a quantified diagnostic in the write-up rather than a fix."
   echo "Not burning the remaining window re-validating something that needs no re-validation."
+  exit 0
+fi
+
+if [[ "$CHECK" == "1" ]]; then
+  echo ""; echo "=== --check: would select amplitude $AMP --- nothing run, sweep untouched ==="
   exit 0
 fi
 
