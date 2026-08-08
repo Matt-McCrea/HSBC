@@ -32,13 +32,26 @@ CAP_SECS=2400   # 40 min per-day cap
 CKPTS_ARG=""    # space-separated substrings to match against ckpt filenames, in priority order
 DAYS_ARG=""     # space-separated days; empty = full month
 OUT_TAG="run"
+DEADLINE=""     # HH:MM local. Stop cleanly rather than start a day that cannot finish in time.
+ABANDON=1       # 1 = drop a checkpoint on its first failure (triage). 0 = run every day anyway.
 
 while [[ $# -gt 0 ]]; do case "$1" in
   --cap-secs) CAP_SECS="$2"; shift 2;;
   --ckpts) CKPTS_ARG="$2"; shift 2;;
   --days) DAYS_ARG="$2"; shift 2;;
   --out-tag) OUT_TAG="$2"; shift 2;;
+  --deadline) DEADLINE="$2"; shift 2;;
+  --no-abandon) ABANDON=0; shift;;
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
+
+# --deadline exists because a booked GPU window ends at a wall-clock time, not after N days.
+# Being cut off mid-day loses that day's work AND leaves no summary; stopping before a day we
+# cannot finish costs at most one day and keeps the results table intact.
+DEADLINE_EPOCH=0
+if [[ -n "$DEADLINE" ]]; then
+  DEADLINE_EPOCH=$(date -d "today $DEADLINE" +%s 2>/dev/null || date -j -f "%Y-%m-%d %H:%M" "$(date +%F) $DEADLINE" +%s)
+  [[ "$DEADLINE_EPOCH" -gt 0 ]] || { echo "!! could not parse --deadline '$DEADLINE'"; exit 1; }
+fi
 
 # auto-discover whatever's actually in the checkpoint dir right now — newest-first by mtime, so
 # the most recently trained epochs (most likely to reflect the retrain's current behavior) go
@@ -135,6 +148,15 @@ for CKNAME in "${PRIORITY_CKPTS[@]}"; do
   FAILED=0
   for D in "${DAYS[@]}"; do
     LOGF="$OUT_DIR/logs/${TAG}__${D}.txt"
+    # only start a day if it can finish (worst case = the full cap) before the deadline
+    if [[ "$DEADLINE_EPOCH" -gt 0 ]]; then
+      REMAIN=$(( DEADLINE_EPOCH - $(date +%s) ))
+      if [[ "$REMAIN" -lt "$CAP_SECS" ]]; then
+        echo "  -- deadline $DEADLINE reached (${REMAIN}s left < ${CAP_SECS}s cap): stopping before $D" | tee -a "$PROGRESS"
+        write_status "STOPPED at deadline $DEADLINE, before day $D"
+        DEADLINE_HIT=1; break
+      fi
+    fi
     write_status "checkpoint: $TAG   day: $D   (cap ${CAP_SECS}s)"
     T0=$(date +%s)
     if timeout -k 15 "$CAP_SECS" python -u ABIDES/abides.py -c world_agent_sim -t "$TICKER" -date "$D" -st "$ST" -et "$ET" \
@@ -149,14 +171,19 @@ for CKNAME in "${PRIORITY_CKPTS[@]}"; do
     else
       RC=$?
       SECS=$(( $(date +%s) - T0 ))
+      NOTE=$([[ "$ABANDON" == "1" ]] && echo "ABANDONING $TAG." || echo "continuing (--no-abandon).")
       if [[ $RC -eq 124 || $RC -eq 137 ]]; then
-        echo "  $D  TIMEOUT after ${SECS}s — likely unstable. ABANDONING $TAG, moving to next checkpoint." | tee -a "$PROGRESS"
+        echo "  $D  TIMEOUT after ${SECS}s — likely unstable. $NOTE" | tee -a "$PROGRESS"
       else
-        echo "  $D  ERROR (rc=$RC) after ${SECS}s — see logs/${TAG}__${D}.txt. ABANDONING $TAG." | tee -a "$PROGRESS"
+        echo "  $D  ERROR (rc=$RC) after ${SECS}s — see logs/${TAG}__${D}.txt. $NOTE" | tee -a "$PROGRESS"
       fi
       FAILED=1
-      write_status "checkpoint: $TAG   ABANDONED at day $D"
-      break
+      # When validating ONE checkpoint, "fails 3 of 20 days" is the result we want; abandoning at
+      # the first failure would report only "stopped at day 2" and waste the remaining window.
+      if [[ "$ABANDON" == "1" ]]; then
+        write_status "checkpoint: $TAG   ABANDONED at day $D"
+        break
+      fi
     fi
   done
   if [[ "$FAILED" == "0" ]]; then
