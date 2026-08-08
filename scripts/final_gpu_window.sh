@@ -146,8 +146,10 @@ for D in "${DAYS[@]}"; do
   write_status "running $D  (${DONE_N} days done, ${REMAIN}s left)"
   echo "[$(date +%T)] -- $D" ; T0=$(date +%s)
   LOGF="$OUT_DIR/logs/${D}.txt"
+  # ${TO[@]+"${TO[@]}"} not "${TO[@]}": under `set -u`, bash <4.4 treats an EMPTY array
+  # expansion as an unbound variable and aborts. This form expands to nothing when unset.
   TO=(); [[ "$CAP_SECS" -gt 0 ]] && TO=(timeout -k 15 "$CAP_SECS")
-  if "${TO[@]}" python -u ABIDES/abides.py -c world_agent_sim -t "$TICKER" -date "$D" \
+  if ${TO[@]+"${TO[@]}"} python -u ABIDES/abides.py -c world_agent_sim -t "$TICKER" -date "$D" \
         -st "$ST" -et "$ET" -d True -m TRADES -type DDPM -nsteps 100 -eta 0.0 \
         --ckpt-path "$CK" -seed "$SEED" $BASE > "$LOGF" 2>&1; then
     SECS=$(( $(date +%s) - T0 )); CSV=$(grep -oE '/[^ ]+processed_orders\.csv' "$LOGF" | tail -1)
