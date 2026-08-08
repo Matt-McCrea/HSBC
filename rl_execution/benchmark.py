@@ -94,6 +94,15 @@ if __name__ == "__main__":
     parser.add_argument("--sampling-type", default="DDIM")
     parser.add_argument("--ddim-nsteps", type=int, default=10)
     parser.add_argument("--depth-noise", type=float, default=0.3)
+    parser.add_argument("--reward-mode", choices=["terminal", "per-step"], default="terminal",
+                        help="per-step pays each fill's cost at the decision point whose child "
+                             "order produced it -- identical total, but dense, which is what makes "
+                             "credit assignment tractable at a few hundred episodes")
+    parser.add_argument("--reward-benchmark", choices=["arrival", "prevailing"], default="arrival",
+                        help="price each fill is scored against: arrival mid (reward series sums to "
+                             "true shortfall) or the prevailing mid at that step (removes market "
+                             "drift by construction -- drift is common-mode noise that dominates "
+                             "reward variance). Reported shortfall is always vs arrival either way")
     parser.add_argument("--ckpt-path", default=None,
                         help="exact TRADES checkpoint to simulate with; default = lowest val-loss for the symbol")
     parser.add_argument("--out", default="logs/benchmark.jsonl")
@@ -102,5 +111,6 @@ if __name__ == "__main__":
 
     env = ExecutionEnv(symbol=args.symbol, data_dir=args.data_dir, sampling_type=args.sampling_type,
                         ddim_nsteps=args.ddim_nsteps, depth_noise=args.depth_noise,
-                        checkpoint_path=args.ckpt_path)
+                        checkpoint_path=args.ckpt_path,
+                        reward_mode=args.reward_mode, reward_benchmark=args.reward_benchmark)
     run_benchmark(env, args.n_episodes, run_name=args.run_name, out_path=args.out)

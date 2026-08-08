@@ -46,12 +46,51 @@ VOL_BUCKETS_TICKS = [1.0, 3.0]  # realized-vol (std of mid-price returns, in tic
 OFI_BUCKETS = [-0.2, 0.2]  # order-flow imbalance -> 3 buckets: negative / neutral / positive
 VOL_LOOKBACK = 5  # decision points
 
+# Child-order ids are allocated from here upwards. WorldAgent draws its own ids from
+# np.arange(0, 5_000_000) minus the historical ids, so starting well above that range
+# guarantees no collision -- and collisions would silently mis-attribute fills, since
+# attribution is by order id.
+EXEC_ORDER_ID_BASE = 900_000_000
+
+
+def signed_cost(qty, price, benchmark, direction):
+    """Execution cost of one fill against a benchmark price, sign-matched to
+    implementation shortfall: POSITIVE is bad (sold below / bought above)."""
+    return qty * ((benchmark - price) if direction == "SELL" else (price - benchmark))
+
+
+def per_step_rewards(fills_by_step, benchmarks, quantity, direction, n_steps):
+    """Turn fills attributed to each decision point into a per-step reward series.
+
+    Reward is -cost/Q, so summing the series reproduces exactly the negative of the
+    episode's implementation shortfall when `benchmarks` is the arrival mid at every
+    step -- the per-step form is a re-attribution of the same total, not a different
+    objective.
+
+    Passing the PREVAILING mid at each step instead measures execution against the
+    price available when the order was placed, which removes market drift by
+    construction rather than by estimating and subtracting it. Drift is common-mode
+    noise (it moves every action in an episode identically, so it says nothing about
+    which action was better) and it dominates reward variance, so removing it is the
+    single biggest variance reduction available. The reported shortfall is unaffected
+    either way -- it is always computed against the arrival mid.
+    """
+    rewards = [0.0] * n_steps
+    for step, fills in fills_by_step.items():
+        if not 0 <= step < n_steps:
+            continue
+        benchmark = benchmarks[step] if step < len(benchmarks) else benchmarks[-1]
+        cost = sum(signed_cost(q, p, benchmark, direction) for q, p in fills)
+        rewards[step] = -cost / quantity if quantity else 0.0
+    return rewards
+
 
 class RLExecutionAgent(TradingAgent):
 
     def __init__(self, id, name, type, symbol, direction, quantity, p_arrival,
                  start_time, state_queue: queue.Queue, action_queue: queue.Queue,
-                 starting_cash=100000, log_orders=False, random_state=None):
+                 starting_cash=100000, log_orders=False, random_state=None,
+                 reward_mode="terminal", reward_benchmark="arrival"):
         super().__init__(id, name, type, starting_cash=starting_cash, log_orders=log_orders,
                           random_state=random_state)
         assert direction in ("BUY", "SELL")
@@ -73,6 +112,18 @@ class RLExecutionAgent(TradingAgent):
         self._anchor = None        # sim time of the first tradeable wakeup; the schedule's origin
         self._awaiting_action = False
         self._scheduled_times = set()
+
+        # "terminal": one payment at the end (original). "per-step": each fill's cost is
+        # paid at the decision point whose child order produced it -- identical total, but
+        # dense, which is what makes the credit assignment tractable at a few hundred
+        # episodes. reward_benchmark selects arrival mid (true shortfall) or the prevailing
+        # mid at each step (drift-free); see per_step_rewards.
+        self.reward_mode = reward_mode
+        self.reward_benchmark = reward_benchmark
+        self._next_order_id = EXEC_ORDER_ID_BASE + int(id) * 1_000_000
+        self._order_to_step = {}          # child order id -> decision index that placed it
+        self._fills_by_step = {}          # decision index -> [(qty, fill_price), ...]
+        self._paid_steps = set()          # steps whose reward has already been handed out
 
     def getWakeFrequency(self):
         return DECISION_INTERVAL
@@ -109,6 +160,7 @@ class RLExecutionAgent(TradingAgent):
             return
         self._awaiting_action = True
         self.state = "AWAITING_SPREAD"
+        self._cancel_outstanding()
         self.getCurrentSpread(self.symbol, depth=10)
 
     def kernelTerminating(self):
@@ -127,6 +179,11 @@ class RLExecutionAgent(TradingAgent):
             order = msg.body["order"]
             self.fills.append((order.quantity, order.fill_price))
             self.rem_quantity = max(0, self.quantity - sum(q for q, _ in self.fills))
+            # Attribute by ORDER ID, not by arrival time: a passive child order can fill
+            # after later decisions have been taken, and crediting that fill to whichever
+            # decision happened to be current would blame the wrong action.
+            step = self._order_to_step.get(order.order_id, self.decision_index)
+            self._fills_by_step.setdefault(step, []).append((order.quantity, order.fill_price))
 
     def querySpread(self, symbol, price, bids, asks, book):
         super().querySpread(symbol, price, bids, asks, book)
@@ -139,7 +196,11 @@ class RLExecutionAgent(TradingAgent):
         self.mid_history.append(mid)
 
         obs = self._build_state(best_bid, best_ask, bids, asks)
-        self.state_queue.put(("obs", obs, {"decision_index": self.decision_index}))
+        # Reward for the PREVIOUS decision, settled now that its interval has closed and
+        # its fills are in. env.step(a_k) returns this alongside the next observation,
+        # which is the standard (s, a, r, s') ordering.
+        self.state_queue.put(("obs", obs, {"decision_index": self.decision_index,
+                                            "reward": self._settle_rewards()}))
 
         action = self.action_queue.get()  # blocks the Kernel thread until env.step() supplies one
 
@@ -170,13 +231,31 @@ class RLExecutionAgent(TradingAgent):
     def _place_child_order(self, action_idx, qty, best_bid, best_ask):
         level = ACTION_LEVELS[action_idx]
         is_buy = self.direction == "BUY"
+        order_id = self._next_order_id
+        self._next_order_id += 1
+        self._order_to_step[order_id] = self.decision_index
         if level["order_type"] == "market" or best_bid is None or best_ask is None:
-            self.placeMarketOrder(self.symbol, qty, is_buy_order=is_buy)
+            self.placeMarketOrder(self.symbol, qty, is_buy_order=is_buy, order_id=order_id)
             return
         own_best = best_bid if is_buy else best_ask
         opp_best = best_ask if is_buy else best_bid
         price = opp_best if level["price_cross"] else own_best
-        self.placeLimitOrder(self.symbol, qty, is_buy_order=is_buy, limit_price=price)
+        self.placeLimitOrder(self.symbol, qty, is_buy_order=is_buy, limit_price=price,
+                             order_id=order_id)
+
+    def _cancel_outstanding(self):
+        """Cancel any child order still resting from an earlier decision point.
+
+        Three things this fixes at once. It bounds each decision's fills to its own
+        interval, which is what makes per-step attribution exact. It stops stale quotes
+        from earlier decisions sitting in the book all episode distorting it. And it
+        removes a real over-execution bug: rem_quantity is derived from fills, so the
+        terminal sweep sizes itself against inventory that old resting orders could then
+        fill on top of, selling more than the parent order. Re-quoting each interval is
+        also what production execution algos do (cf. POVExecutionAgent.cancelOrders).
+        """
+        for order in list(self.orders.values()):
+            self.cancelOrder(order)
 
     def _build_state(self, best_bid, best_ask, bids, asks):
         time_remaining_frac = (N_DECISIONS - self.decision_index) / N_DECISIONS
@@ -206,6 +285,42 @@ class RLExecutionAgent(TradingAgent):
             "ofi_bucket": ofi_bucket,
         }
 
+    def _benchmarks(self):
+        """Benchmark price per decision point: the arrival mid throughout (so the reward
+        series sums to true shortfall), or the prevailing mid at each step (drift-free)."""
+        if self.reward_benchmark == "prevailing" and self.mid_history:
+            return list(self.mid_history)
+        return [self.p_arrival] * max(1, len(self.mid_history))
+
+    def _settle_rewards(self):
+        """Pay out every step whose fills are now known and which has not been paid yet.
+
+        In terminal mode this always returns 0 until _finalize, preserving the original
+        behaviour exactly.
+        """
+        if self.reward_mode != "per-step":
+            return 0.0
+        rewards = per_step_rewards(self._fills_by_step, self._benchmarks(), self.quantity,
+                                   self.direction, N_DECISIONS + 1)
+        due = 0.0
+        for step in sorted(self._fills_by_step):
+            if step not in self._paid_steps and step < self.decision_index:
+                due += rewards[step]
+                self._paid_steps.add(step)
+        return due
+
+    def _final_reward(self, shortfall):
+        """Terminal payment. In per-step mode most of the episode has already been paid
+        out, so only the steps not yet settled are due here -- paying -shortfall again
+        would double-count everything already handed to the agent."""
+        if self.reward_mode != "per-step":
+            return -shortfall
+        rewards = per_step_rewards(self._fills_by_step, self._benchmarks(), self.quantity,
+                                   self.direction, N_DECISIONS + 1)
+        due = sum(r for step, r in enumerate(rewards) if step not in self._paid_steps)
+        self._paid_steps.update(range(len(rewards)))
+        return due
+
     def _finalize(self, currentTime, reason="completed"):
         if self._finalized:
             return
@@ -225,7 +340,7 @@ class RLExecutionAgent(TradingAgent):
             # closing mid makes that decomposable after the fact instead of confounded.
             "p_final": (self.mid_history[-1] if self.mid_history else None),
         }
-        self.state_queue.put(("done", -shortfall, info))
+        self.state_queue.put(("done", self._final_reward(shortfall), info))
 
     def _compute_shortfall(self):
         if not self.fills or self.quantity == 0:

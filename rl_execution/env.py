@@ -119,10 +119,13 @@ class ExecutionEnv:
 
     def __init__(self, symbol="INTC", data_dir="data", sampling_type="DDIM", ddim_nsteps=10,
                  depth_noise=0.3, checkpoint_path=None, seed_days=None, Q_range=(1000, 5000),
-                 random_state=None, min_seconds_after_open=MIN_SECONDS_AFTER_OPEN):
+                 random_state=None, min_seconds_after_open=MIN_SECONDS_AFTER_OPEN,
+                 reward_mode="terminal", reward_benchmark="arrival"):
         self.symbol = symbol
         self.data_dir = data_dir
         self.min_seconds_after_open = min_seconds_after_open
+        self.reward_mode = reward_mode
+        self.reward_benchmark = reward_benchmark
         self.depth_noise = depth_noise
         self.sampling_type = sampling_type
         self.ddim_nsteps = ddim_nsteps
@@ -136,6 +139,7 @@ class ExecutionEnv:
         # previously auto-selected and never recorded anywhere.
         print(f"[ExecutionEnv] checkpoint={self.checkpoint_path}")
         print(f"[ExecutionEnv] sampler={sampling_type} ddim_nsteps={ddim_nsteps} depth_noise={depth_noise}")
+        print(f"[ExecutionEnv] reward_mode={reward_mode} benchmark={reward_benchmark}")
         self.normalization_terms = load_compute_normalization_terms(
             symbol, data_dir, cst.Models.TRADES, n_lob_levels=10)
         self.cond_seq_size = (self.config.HYPER_PARAMETERS[cst.LearningHyperParameter.SEQ_SIZE]
@@ -234,7 +238,8 @@ class ExecutionEnv:
             id=EXEC_AGENT_ID, name="RL_EXECUTION_AGENT", type="ExecutionAgent", symbol=self.symbol,
             direction=side, quantity=Q, p_arrival=p_arrival, start_time=kernel_start,
             state_queue=state_queue, action_queue=action_queue,
-            random_state=np.random.RandomState(seed=self.rng.randint(0, 2**31)))
+            random_state=np.random.RandomState(seed=self.rng.randint(0, 2**31)),
+            reward_mode=self.reward_mode, reward_benchmark=self.reward_benchmark)
         self._exec_agent = exec_agent
 
         kernel = Kernel("RL Execution Kernel", random_state=np.random.RandomState(seed=self.rng.randint(0, 2**31)))
@@ -332,7 +337,9 @@ class ExecutionEnv:
             raise RuntimeError("episode failed inside the Kernel thread") from payload
         info = {**self._episode_info, **info}
         if kind == "obs":
-            return payload, 0.0, False, info
+            # In per-step reward mode the agent settles the previous decision's fills and
+            # sends the amount alongside this observation; in terminal mode it is always 0.
+            return payload, float(info.get("reward") or 0.0), False, info
         elif kind == "done":
             return None, payload, True, info
         raise ValueError(f"unexpected message kind: {kind}")
