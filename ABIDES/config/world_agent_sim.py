@@ -530,7 +530,9 @@ if args.diffusion:
     if args.cancel_boost != 0.0:
         _flag_suffix += "_cb{}".format(args.cancel_boost)
     if args.depth_drift > 0.0:
-        _flag_suffix += "_dd{}".format(args.depth_drift)
+        # phi must be in the path too: cells that differ only in persistence length would
+        # otherwise share an output dir and silently overwrite each other.
+        _flag_suffix += "_dd{}p{}".format(args.depth_drift, args.depth_drift_phi)
     if args.book_target_thick > 0.0:
         _flag_suffix += "_bt{}r{}".format(args.book_target_thick, args.book_cancel_rate)
     if args.cond_clip > 0.0:

@@ -72,11 +72,12 @@ BASE="--size-reshape --type-decode prior"
 # headroom so a cell is never killed just short of finishing (which is what happened on the first
 # attempt: cells reached simulated 11:50 of a 12:00 window and were cut off at 98%).
 CAP=""
-QUICK=0; DRY=0; MAXCELLS=0
+QUICK=0; DRY=0; MAXCELLS=0; PLAN="persistence"
 OUT_DIR="drift_sweep/$(date +%Y%m%d_%H%M%S)"
 
 while [[ $# -gt 0 ]]; do case "$1" in
   --quick) QUICK=1; shift;;
+  --plan) PLAN="$2"; shift 2;;
   --dry-run) DRY=1; shift;;
   --ckpt) CKPT_FRAG="$2"; shift 2;;
   --day) DAY="$2"; shift 2;;
@@ -116,6 +117,43 @@ EXTRA=(
   "no_type_prior|0.3|0.0|0.995|0"          # drop --type-decode prior (see CELLBASE below)
 )
 [[ "$QUICK" == "0" ]] && CELLS+=("${EXTRA[@]}")
+
+# ---------------------------------------------------------------------------
+# --plan amplitude: the FOLLOW-UP sweep, after run 1 showed drift works but overshoots.
+#
+#   Run 1 (60min window, INTC 0129) bracketed the answer rather than missing it:
+#
+#                     1s vol   range   VR(10s)  VR(60s)  VR(300s)
+#     REAL             1.51     46      1.038    1.181    0.738
+#     dd 0.00          1.43     12      0.283    0.072    0.008   <- no persistence
+#     dd 0.25          2.26    164      0.709    2.276    4.428   <- overshoots badly
+#
+#   Note the model ALREADY matches real on 1-second volatility at dd=0 (1.43 vs 1.51). The whole
+#   deficit is persistence, and dd=0.25 overcorrects into a trending regime. The target sits
+#   between the two rows, so this plan sweeps amplitude DOWNWARD at fixed phi.
+#
+#   Two extrapolations from the bracket disagree, which is why this is a sweep and not one cell:
+#     range, linear in dd     ->  12 + (164-12)*x/0.25 = 46  ->  dd ~ 0.06
+#     VR, quadratic in dd     ->  (2.276-0.072)*(x/0.25)^2 = 1.11  ->  dd ~ 0.18
+#   The cells span both estimates.
+#
+#   PHI IS HELD FIXED at 0.9998 (~111s). Run 1 produced NO usable information about phi --- all
+#   three phi cells collided on one output directory (fixed now in world_agent_sim.py, which
+#   encodes phi in the path). Amplitude is the dominant knob (30x move in VR) so it is calibrated
+#   first; phi is worth a second pass only once amplitude lands.
+# ---------------------------------------------------------------------------
+if [[ "$PLAN" == "amplitude" ]]; then
+  CELLS=(
+    "amp0.05|0.3|0.05|0.9998|0"
+    "amp0.08|0.3|0.08|0.9998|0"
+    "amp0.12|0.3|0.12|0.9998|0"
+    "amp0.18|0.3|0.18|0.9998|0"
+    # the lever compounded strongly in run 1 (drift alone VR60s 2.276 -> with lever 3.526), so it
+    # needs re-testing at an amplitude that is not already saturated
+    "amp0.08_lever|0.3|0.08|0.9998|1"
+  )
+fi
+
 [[ "$MAXCELLS" -gt 0 ]] && CELLS=("${CELLS[@]:0:$MAXCELLS}")
 
 # minutes of simulated time -> measured wall-clock per cell -> cap with headroom
