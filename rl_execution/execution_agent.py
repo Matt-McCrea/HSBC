@@ -113,6 +113,7 @@ class RLExecutionAgent(TradingAgent):
 
         self.decision_index = 0
         self.mid_history = []
+        self.quote_history = []   # (best_bid, best_ask) per decision, for impact analysis
         self.fills = []  # list of (qty, fill_price)
         self.state = "AWAITING_WAKEUP"
         self._finalizing = False
@@ -209,6 +210,10 @@ class RLExecutionAgent(TradingAgent):
         best_ask = asks[0][0] if asks else None
         mid = (best_bid + best_ask) / 2.0 if (best_bid is not None and best_ask is not None) else self.p_arrival
         self.mid_history.append(mid)
+        # Raw touch prices as well as the mid: the spread actually available at the
+        # moment of the decision is what separates the half-spread we pay from the
+        # impact we cause, and it cannot be recovered from the mid alone.
+        self.quote_history.append((best_bid, best_ask))
 
         obs = self._build_state(best_bid, best_ask, bids, asks)
         # Reward for the PREVIOUS decision, settled now that its interval has closed and
@@ -223,6 +228,8 @@ class RLExecutionAgent(TradingAgent):
             # step's execution -- the mid it faced and the fills it produced.
             "step_mid": (self.mid_history[prev_step] if 0 <= prev_step < len(self.mid_history) else None),
             "step_fills": list(self._fills_by_step.get(prev_step, [])),
+            "step_quote": (self.quote_history[prev_step]
+                            if 0 <= prev_step < len(self.quote_history) else None),
         }))
 
         action = self.action_queue.get()  # blocks the Kernel thread until env.step() supplies one
@@ -371,6 +378,7 @@ class RLExecutionAgent(TradingAgent):
             # carry because there isn't one.
             "step_mid": (self.mid_history[-1] if self.mid_history else None),
             "step_fills": list(self._fills_by_step.get(max(0, self.decision_index - 1), [])),
+            "step_quote": (self.quote_history[-1] if self.quote_history else None),
             # Mid at the last decision point. Shortfall alone cannot separate execution
             # quality from where the market simply went: with a SELL-only design, any
             # upward drift in the generated price flatters the seller, and TRADES has a

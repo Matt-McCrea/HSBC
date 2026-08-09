@@ -60,7 +60,7 @@ def shortfall_bps(info):
     return float(shortfall) / float(p_arrival) * 10_000.0
 
 
-def trajectory_step(obs, action, reward, done, mid=None, fills=None):
+def trajectory_step(obs, action, reward, done, mid=None, fills=None, quote=None):
     """One decision point, recorded so a Q-table can be re-fit OFFLINE later.
 
     Episode-level logging alone means every learning-rule change (a different alpha
@@ -91,6 +91,8 @@ def trajectory_step(obs, action, reward, done, mid=None, fills=None):
         "done": bool(done),
         "mid": (float(mid) if mid is not None else None),
         "fills": [[float(q), float(p)] for q, p in (fills or [])],
+        "bid": (float(quote[0]) if quote and quote[0] is not None else None),
+        "ask": (float(quote[1]) if quote and quote[1] is not None else None),
     }
 
 

@@ -78,7 +78,8 @@ def evaluate_policy(env: ExecutionEnv, policy, seeds, logger: JsonlLogger, run_n
             obs, reward, done, info = env.step(action)
             trajectory.append(_traj(prev_obs, action, reward, done,
                                      mid=info.get("step_mid"),
-                                     fills=info.get("step_fills")))
+                                     fills=info.get("step_fills"),
+                                     quote=info.get("step_quote")))
         elapsed = time.perf_counter() - start
         wall_clock_used += elapsed
         n_run += 1

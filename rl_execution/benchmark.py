@@ -41,7 +41,8 @@ def run_benchmark(env: ExecutionEnv, n_episodes: int, policy=None, run_name="ben
             obs, reward, done, info = env.step(action)
             trajectory.append(_traj(prev_obs, action, reward, done,
                                      mid=info.get("step_mid"),
-                                     fills=info.get("step_fills")))
+                                     fills=info.get("step_fills"),
+                                     quote=info.get("step_quote")))
         ep_elapsed = time.perf_counter() - ep_start
 
         record = logger.log_episode(

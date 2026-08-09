@@ -51,7 +51,8 @@ def train(env: ExecutionEnv, policy: QLearningPolicy, n_episodes: int, checkpoin
             # offline (see refit_qtable) -- the whole point of logging trajectories.
             trajectory.append(_traj(obs, action, reward, done,
                                      mid=info.get("step_mid"),
-                                     fills=info.get("step_fills")))
+                                     fills=info.get("step_fills"),
+                                     quote=info.get("step_quote")))
             shaped = reward + inventory_penalty(obs["inventory_remaining_frac"],
                                                  inventory_penalty_lambda)
             policy.update(obs, action, shaped, next_obs, done)
