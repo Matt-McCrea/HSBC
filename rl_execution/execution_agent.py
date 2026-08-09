@@ -199,8 +199,16 @@ class RLExecutionAgent(TradingAgent):
         # Reward for the PREVIOUS decision, settled now that its interval has closed and
         # its fills are in. env.step(a_k) returns this alongside the next observation,
         # which is the standard (s, a, r, s') ordering.
-        self.state_queue.put(("obs", obs, {"decision_index": self.decision_index,
-                                            "reward": self._settle_rewards()}))
+        prev_step = self.decision_index - 1
+        self.state_queue.put(("obs", obs, {
+            "decision_index": self.decision_index,
+            "reward": self._settle_rewards(),
+            # Reported for the step being SETTLED, not the one starting: the caller logs
+            # these against the (s, a) it is about to record, so they must describe that
+            # step's execution -- the mid it faced and the fills it produced.
+            "step_mid": (self.mid_history[prev_step] if 0 <= prev_step < len(self.mid_history) else None),
+            "step_fills": list(self._fills_by_step.get(prev_step, [])),
+        }))
 
         action = self.action_queue.get()  # blocks the Kernel thread until env.step() supplies one
 
@@ -333,6 +341,10 @@ class RLExecutionAgent(TradingAgent):
             "shortfall": shortfall,
             "decisions_made": self.decision_index,
             "termination_reason": reason,
+            # The final decision's own mid and fills, which no later observation will
+            # carry because there isn't one.
+            "step_mid": (self.mid_history[-1] if self.mid_history else None),
+            "step_fills": list(self._fills_by_step.get(max(0, self.decision_index - 1), [])),
             # Mid at the last decision point. Shortfall alone cannot separate execution
             # quality from where the market simply went: with a SELL-only design, any
             # upward drift in the generated price flatters the seller, and TRADES has a

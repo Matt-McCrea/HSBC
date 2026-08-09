@@ -88,3 +88,21 @@ def test_out_of_range_steps_are_ignored_not_crashed():
     the terminal sweep) must not index out of bounds."""
     rewards = per_step_rewards({999: [(100, P_ARRIVAL)]}, [P_ARRIVAL] * 2, Q, "SELL", 2)
     assert rewards == [0.0, 0.0]
+
+
+def test_refit_can_switch_benchmark_offline():
+    """A 26-hour run must not lock in the arrival-vs-prevailing choice. Given per-step
+    mid and fills in the log, a refit must be able to rebuild rewards either way."""
+    from rl_execution.refit_qtable import _recomputed_reward
+
+    rec = {"p_arrival": P_ARRIVAL, "Q": Q, "side": "SELL"}
+    step = {"mid": P_ARRIVAL + 200.0, "fills": [[500, P_ARRIVAL + 200.0]]}
+
+    # sold exactly at the prevailing mid -> no execution edge either way
+    assert _recomputed_reward(step, rec, "prevailing") == pytest.approx(0.0)
+    # ... but against the arrival mid that same fill is favourable, since price rose
+    assert _recomputed_reward(step, rec, "arrival") > 0
+
+    # logs predating per-step mid/fills must fall back, not crash or fabricate
+    assert _recomputed_reward({"mid": None, "fills": []}, rec, "prevailing") is None
+    assert _recomputed_reward({"mid": None, "fills": [[100, P_ARRIVAL]]}, rec, "prevailing") is None

@@ -49,7 +49,9 @@ def train(env: ExecutionEnv, policy: QLearningPolicy, n_episodes: int, checkpoin
             # Log the TRUE reward, learn from the shaped one. Baking the penalty into the
             # log would freeze lambda into the data and forfeit the ability to re-sweep it
             # offline (see refit_qtable) -- the whole point of logging trajectories.
-            trajectory.append(_traj(obs, action, reward, done))
+            trajectory.append(_traj(obs, action, reward, done,
+                                     mid=info.get("step_mid"),
+                                     fills=info.get("step_fills")))
             shaped = reward + inventory_penalty(obs["inventory_remaining_frac"],
                                                  inventory_penalty_lambda)
             policy.update(obs, action, shaped, next_obs, done)

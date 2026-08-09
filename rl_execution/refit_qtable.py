@@ -29,6 +29,7 @@ import argparse
 import numpy as np
 
 from rl_execution.logging_utils import read_episodes
+from rl_execution.execution_agent import signed_cost
 from rl_execution.qlearning import (N_ACTIONS, N_STATES, QLearningPolicy, inventory_penalty,
                                      inventory_risk, state_to_index)
 
@@ -43,8 +44,38 @@ def _obs_from_step(step):
     }
 
 
+def _recomputed_reward(step, rec, benchmark):
+    """Rebuild a step's reward under a different benchmark price.
+
+    Returns None when the log lacks the per-step mid/fills needed (runs predating
+    that logging), so the caller falls back to the reward as recorded.
+
+    The arrival-vs-prevailing choice is a real change of objective, not a
+    normalisation: arrival keeps true implementation shortfall and makes the agent
+    bear timing risk; prevailing scores execution against the price available at the
+    time, removing timing risk (and the drift variance with it) so that urgency comes
+    only from the inventory penalty. Being able to switch offline means a long run
+    does not lock that decision in.
+    """
+    fills = step.get("fills")
+    if not fills:
+        return 0.0 if step.get("mid") is not None else None
+    if benchmark == "prevailing":
+        price = step.get("mid")
+    else:
+        price = rec.get("p_arrival")
+    if price is None:
+        return None
+    quantity = rec.get("Q")
+    if not quantity:
+        return None
+    direction = str(rec.get("side", "SELL"))
+    cost = sum(signed_cost(q, p, float(price), direction) for q, p in fills)
+    return -cost / float(quantity)
+
+
 def refit(records, alpha_mode="visit-count", alpha=0.3, gamma=1.0, drift_adjust=False,
-          inventory_lambda=0.0):
+          inventory_lambda=0.0, reward_benchmark=None):
     q = np.zeros((N_STATES, N_ACTIONS), dtype=np.float64)
     visits = np.zeros((N_STATES, N_ACTIONS), dtype=np.int64)
     n_eps = n_steps = 0
@@ -68,6 +99,10 @@ def refit(records, alpha_mode="visit-count", alpha=0.3, gamma=1.0, drift_adjust=
             s = state_to_index(_obs_from_step(step))
             a = int(step["a"])
             r = float(step["r"])
+            if reward_benchmark is not None:
+                recomputed = _recomputed_reward(step, rec, reward_benchmark)
+                if recomputed is not None:
+                    r = recomputed
             done = bool(step["done"])
             if done and drift_raw is not None:
                 # Sell-side sign convention matches _compute_shortfall: a rising market
@@ -161,6 +196,11 @@ def main():
     parser.add_argument("--alpha-mode", choices=["visit-count", "fixed"], default="visit-count")
     parser.add_argument("--alpha", type=float, default=0.3, help="used only with --alpha-mode fixed")
     parser.add_argument("--gamma", type=float, default=1.0)
+    parser.add_argument("--reward-benchmark", choices=["arrival", "prevailing"], default=None,
+                        help="recompute per-step rewards against this benchmark instead of using "
+                             "the logged ones (needs per-step mid/fills in the log). arrival keeps "
+                             "true shortfall and makes the agent bear timing risk; prevailing removes "
+                             "timing risk and its variance, leaving urgency to the inventory penalty")
     parser.add_argument("--inventory-penalty", type=float, default=0.0,
                         help="Almgren-Chriss running risk penalty lambda*x_t^2 per step")
     parser.add_argument("--penalty-sweep", default=None,
@@ -174,7 +214,7 @@ def main():
     q, visits, n_eps, n_steps, skipped = refit(
         records, alpha_mode=args.alpha_mode, alpha=args.alpha,
         gamma=args.gamma, drift_adjust=args.drift_adjust,
-        inventory_lambda=args.inventory_penalty)
+        inventory_lambda=args.inventory_penalty, reward_benchmark=args.reward_benchmark)
 
     print("=" * 74)
     print(f"REFIT from {args.log}")

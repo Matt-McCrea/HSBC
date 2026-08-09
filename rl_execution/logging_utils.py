@@ -60,7 +60,7 @@ def shortfall_bps(info):
     return float(shortfall) / float(p_arrival) * 10_000.0
 
 
-def trajectory_step(obs, action, reward, done):
+def trajectory_step(obs, action, reward, done, mid=None, fills=None):
     """One decision point, recorded so a Q-table can be re-fit OFFLINE later.
 
     Episode-level logging alone means every learning-rule change (a different alpha
@@ -71,6 +71,14 @@ def trajectory_step(obs, action, reward, done):
 
     Stores the raw observation, not a state index, so a refit is free to bucket the
     state differently from however the run that produced it happened to.
+
+    `mid` and `fills` are recorded so the REWARD itself can be recomputed offline under
+    a different benchmark. That matters because the arrival-vs-prevailing choice is not
+    cosmetic -- arrival keeps true implementation shortfall (the agent bears timing
+    risk), prevailing scores execution against the price available at the time (timing
+    risk removed, urgency coming only from the inventory penalty). Without these two
+    fields that choice would be frozen into a 26-hour run instead of being a free
+    decision made after seeing the data.
     """
     return {
         "t_rem": obs["time_remaining_frac"],
@@ -81,6 +89,8 @@ def trajectory_step(obs, action, reward, done):
         "a": int(action),
         "r": float(reward),
         "done": bool(done),
+        "mid": (float(mid) if mid is not None else None),
+        "fills": [[float(q), float(p)] for q, p in (fills or [])],
     }
 
 

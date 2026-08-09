@@ -76,7 +76,9 @@ def evaluate_policy(env: ExecutionEnv, policy, seeds, logger: JsonlLogger, run_n
             action = policy.select_action(obs, greedy=True)
             prev_obs = obs
             obs, reward, done, info = env.step(action)
-            trajectory.append(_traj(prev_obs, action, reward, done))
+            trajectory.append(_traj(prev_obs, action, reward, done,
+                                     mid=info.get("step_mid"),
+                                     fills=info.get("step_fills")))
         elapsed = time.perf_counter() - start
         wall_clock_used += elapsed
         n_run += 1
