@@ -194,6 +194,9 @@ if __name__ == "__main__":
     parser.add_argument("--depth-noise", type=float, default=0.3)
     parser.add_argument("--ddim-nsteps", type=int, default=10)
     parser.add_argument("--out", default="logs/evaluate.jsonl")
+    parser.add_argument("--ac-kappa", type=float, default=None,
+                        help="add an Almgren-Chriss schedule baseline at this kappa*T "
+                             "(0 reproduces TWAP; use the value calibration derived)")
     parser.add_argument("--eval-seed", type=int, default=123)
     parser.add_argument("--skip-ddpm", action="store_true",
                         help="smoke-test only: skip the slow DDPM-100 arm (produces NO sampler comparison)")
@@ -202,7 +205,19 @@ if __name__ == "__main__":
                              "whatever it used, so total runtime is roughly twice this")
     args = parser.parse_args()
 
+    policies = None
+    if args.ac_kappa is not None:
+        # Explicit policy set so the AC baseline is available from the CLI, not only
+        # from the orchestrator -- evaluation is often run by hand when the wall-clock
+        # split needs to differ from the session default.
+        from rl_execution.baselines import ACSchedulePolicy
+        from rl_execution.qlearning import TWAPPolicy as _TWAP
+        policies = {"twap": _TWAP(), f"ac_k{args.ac_kappa:g}": ACSchedulePolicy(kappa=args.ac_kappa)}
+        if args.qtable:
+            policies["qlearning"] = QLearningPolicy.load(args.qtable)
+
     run_comparison(data_dir=args.data_dir, symbol=args.symbol, qtable_path=args.qtable,
                     n_seeds=args.n_seeds, depth_noise=args.depth_noise, ddim_nsteps=args.ddim_nsteps,
                     out_path=args.out, eval_seed=args.eval_seed, ckpt_path=args.ckpt_path,
-                    skip_ddpm=args.skip_ddpm, max_hours_per_arm=args.max_hours_per_arm)
+                    skip_ddpm=args.skip_ddpm, max_hours_per_arm=args.max_hours_per_arm,
+                    policies=policies)
