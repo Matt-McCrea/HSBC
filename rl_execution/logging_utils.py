@@ -16,7 +16,7 @@ EPISODE_LOG_FIELDS = (
     "run_name", "run_id", "timestamp", "seed_day", "t0", "side", "Q", "sampling_type",
     "depth_noise", "ddim_nsteps", "checkpoint", "policy_name", "wall_clock_total_s",
     "wall_clock_reconstruct_s", "wall_clock_simulate_s", "p_arrival", "p_final",
-    "shortfall", "shortfall_bps", "drift_bps", "reward", "n_resting_orders", "n_steps",
+    "shortfall", "shortfall_bps", "drift_bps", "reward", "n_resting_orders", "rem_quantity", "n_steps",
     "fills", "cond_z", "flow_mix", "execution_rate", "unique_mid_count", "trajectory", "error",
 )
 

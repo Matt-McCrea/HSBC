@@ -52,7 +52,7 @@ def run_benchmark(env: ExecutionEnv, n_episodes: int, policy=None, run_name="ben
             wall_clock_reconstruct_s=info["wall_clock_reconstruct_s"],
             wall_clock_simulate_s=info["wall_clock_simulate_s"], p_arrival=info["p_arrival"], p_final=info.get("p_final"),
             shortfall=info["shortfall"], shortfall_bps=_bps(info), drift_bps=_drift(info), reward=reward,
-            n_resting_orders=info["n_resting_orders"],
+            n_resting_orders=info["n_resting_orders"], rem_quantity=info.get("rem_quantity"),
             fills=info["fills"], cond_z=info["cond_stats"], flow_mix=info["flow_mix"],
             execution_rate=info["execution_rate"], unique_mid_count=info["unique_mid_count"],
             trajectory=trajectory,

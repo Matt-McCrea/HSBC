@@ -218,7 +218,13 @@ class RLExecutionAgent(TradingAgent):
         # (the standard Almgren-Chriss terminal constraint).
         qty = self.rem_quantity if is_last else self._child_order_qty(action)
         if qty > 0:
-            self._place_child_order(action, qty, best_bid, best_ask)
+            # force_market on the terminal sweep: the action still chooses the order TYPE,
+            # so a passive action would rest a limit order for the whole remainder, which
+            # may never fill. That breaks Almgren-Chriss's x_N = 0 constraint AND creates a
+            # degenerate optimum -- _compute_shortfall divides by Q, so leaving inventory
+            # unsold SHRINKS the reported cost, while the fills that did occur were passive
+            # and earned the spread. "Be passive and don't finish" would then dominate.
+            self._place_child_order(action, qty, best_bid, best_ask, force_market=is_last)
 
         self.decision_index += 1
         self._awaiting_action = False
@@ -236,13 +242,13 @@ class RLExecutionAgent(TradingAgent):
         qty = round(ACTION_LEVELS[action_idx]["participation"] * base_slice)
         return int(min(qty, self.rem_quantity))
 
-    def _place_child_order(self, action_idx, qty, best_bid, best_ask):
+    def _place_child_order(self, action_idx, qty, best_bid, best_ask, force_market=False):
         level = ACTION_LEVELS[action_idx]
         is_buy = self.direction == "BUY"
         order_id = self._next_order_id
         self._next_order_id += 1
         self._order_to_step[order_id] = self.decision_index
-        if level["order_type"] == "market" or best_bid is None or best_ask is None:
+        if force_market or level["order_type"] == "market" or best_bid is None or best_ask is None:
             self.placeMarketOrder(self.symbol, qty, is_buy_order=is_buy, order_id=order_id)
             return
         own_best = best_bid if is_buy else best_ask

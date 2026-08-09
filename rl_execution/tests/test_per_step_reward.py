@@ -106,3 +106,37 @@ def test_refit_can_switch_benchmark_offline():
     # logs predating per-step mid/fills must fall back, not crash or fabricate
     assert _recomputed_reward({"mid": None, "fills": []}, rec, "prevailing") is None
     assert _recomputed_reward({"mid": None, "fills": [[100, P_ARRIVAL]]}, rec, "prevailing") is None
+
+
+def test_terminal_sweep_forces_a_market_order():
+    """Almgren-Chriss requires x_N = 0. The terminal action still selects the order
+    TYPE, so without force_market a passive action would rest a limit order for the
+    whole remainder that may never fill -- breaking the constraint and, worse, creating
+    a degenerate optimum: shortfall divides by Q, so leaving inventory unsold shrinks
+    the reported cost while the fills that did happen earned the spread passively.
+    """
+    from rl_execution.execution_agent import ACTION_LEVELS, RLExecutionAgent
+
+    placed = []
+
+    class Spy(RLExecutionAgent):
+        def __init__(self):  # bypass TradingAgent.__init__; only the routing matters here
+            self.direction = "SELL"
+            self.decision_index = 9
+            self._next_order_id = 1
+            self._order_to_step = {}
+            self.symbol = "INTC"
+
+        def placeMarketOrder(self, symbol, qty, is_buy_order, order_id=None):
+            placed.append(("market", qty))
+
+        def placeLimitOrder(self, symbol, qty, is_buy_order, limit_price, order_id=None):
+            placed.append(("limit", qty))
+
+    passive = next(i for i, lv in enumerate(ACTION_LEVELS) if lv["order_type"] == "limit")
+
+    Spy()._place_child_order(passive, 500, 339900, 340100, force_market=False)
+    assert placed[-1][0] == "limit", "non-terminal passive action should still rest a limit"
+
+    Spy()._place_child_order(passive, 500, 339900, 340100, force_market=True)
+    assert placed[-1] == ("market", 500), "terminal sweep must market-order the remainder"
