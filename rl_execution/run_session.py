@@ -63,6 +63,21 @@ class Session:
 
     # ---------- process runner ----------
 
+    def rotate(self, path):
+        """Move an existing log aside before a stage writes to it.
+
+        Logs are append-only, so a rerun into the same filename silently mixes attempts.
+        That is not cosmetic: preflight re-read three episodes from a PREVIOUS, broken
+        attempt and failed the session on them, hiding the fact that all three new
+        episodes had actually passed. Anything that reads a whole log back must start
+        from a clean file.
+        """
+        if os.path.exists(path):
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            archived = f"{path}.{stamp}.bak"
+            os.rename(path, archived)
+            print(f"[session] archived previous {path} -> {archived}", flush=True)
+
     def run(self, module, cli_args, stage):
         cmd = [sys.executable, "-u", "-m", f"rl_execution.{module}"] + [str(a) for a in cli_args]
         print(f"[session] $ {' '.join(cmd)}", flush=True)
@@ -82,6 +97,7 @@ class Session:
         cfg = {"reward_mode": "per-step", "reward_benchmark": "arrival",
                "inventory_penalty": 0.0, "alpha_mode": "visit-count"}
         log = "logs/preflight.jsonl"
+        self.rotate(log)
         ok = self.run("benchmark", [
             "--n-episodes", 3, "--out", log, "--run-name", "preflight",
             "--reward-mode", cfg["reward_mode"], "--reward-benchmark", cfg["reward_benchmark"],
@@ -131,6 +147,7 @@ class Session:
         derive the inventory penalty and the AC baseline's kappa."""
         self.banner("STAGE 1 - calibration")
         log = "logs/calibration.jsonl"
+        self.rotate(log)
         self.run("benchmark", [
             "--n-episodes", self.args.calibration_episodes, "--out", log,
             "--run-name", "calibration",
@@ -153,6 +170,7 @@ class Session:
 
     def stage_train(self, cfg):
         self.banner("STAGE 2 - training")
+        self.rotate("logs/train_session.jsonl")
         # Reserve time for evaluation; never let training eat the deliverable.
         budget = max(1.0, min(self.args.train_hours, self.hours_left() - self.args.reserve_hours))
         ok = self.run("train", [

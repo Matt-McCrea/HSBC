@@ -17,9 +17,15 @@ from rl_execution.execution_agent import N_DECISIONS
 OVEREXECUTION_TOLERANCE = 1.02
 # Reward attribution is exact arithmetic, so this only absorbs float noise.
 REWARD_SUM_TOLERANCE = 1e-6
-# cond_z far outside this means the conditioning is out of distribution and the
-# generated market is not trustworthy (see the drift diagnostics in analysis/).
-COND_Z_ABS_LIMIT = 12.0
+# cond_z limits are PER CHANNEL, because the channels are not comparably distributed.
+# Inter-arrival time and order size are heavy-tailed by construction -- one long gap
+# between orders, or one unusually large order, produces a big z-score without anything
+# being wrong. Observed healthy maxima across many runs: time ~3-15, size ~3-6, with
+# price and depth staying inside ~5. A single flat limit of 12 therefore fired on
+# perfectly normal episodes (time hitting 12.7 and 14.4) while the genuinely pathological
+# case -- size reaching 97.5, against a typical 3-6 -- is what actually deserves a flag.
+COND_Z_LIMITS = {"time": 25.0, "size": 30.0, "price": 12.0, "depth": 12.0}
+COND_Z_DEFAULT_LIMIT = 12.0
 
 
 def check_episode(rec, reward_mode="per-step", reward_benchmark="arrival"):
@@ -64,10 +70,11 @@ def check_episode(rec, reward_mode="per-step", reward_benchmark="arrival"):
     for channel, stats in cond_z.items():
         if isinstance(stats, (list, tuple)) and len(stats) == 4:
             lo, hi = stats[0], stats[1]
-            if abs(lo) > COND_Z_ABS_LIMIT or abs(hi) > COND_Z_ABS_LIMIT:
+            limit = COND_Z_LIMITS.get(channel, COND_Z_DEFAULT_LIMIT)
+            if abs(lo) > limit or abs(hi) > limit:
                 failures.append(
-                    f"cond_z[{channel}] out of distribution (min={lo:.1f} max={hi:.1f}); "
-                    f"the generated market may not be trustworthy")
+                    f"cond_z[{channel}] out of distribution (min={lo:.1f} max={hi:.1f}, "
+                    f"limit {limit:.0f}); the generated market may not be trustworthy")
 
     if rec.get("error"):
         failures.append(f"episode recorded an error: {rec['error']}")

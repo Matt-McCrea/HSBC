@@ -234,3 +234,37 @@ def test_attribution_fault_does_switch_reward_mode():
 def test_conditioning_fault_is_flagged_not_silently_reconfigured():
     report = ["PREFLIGHT FAILED", "  - cond_z[size] out of distribution (min=-0.4 max=97.5)"]
     assert _preflight_decision(report) == "flag_other"
+
+
+def test_cond_z_limits_are_per_channel():
+    """Inter-arrival time and size are heavy-tailed by construction, so a single flat
+    limit flagged healthy episodes (time hitting 12.7 and 14.4) while the genuinely
+    pathological case was size reaching 97.5 against a typical 3-6."""
+    from rl_execution.preflight import check_episode
+
+    healthy_time = _good_episode()
+    healthy_time["cond_z"] = {"time": [-0.2, 14.4, 0.0, 255]}
+    assert check_episode(healthy_time) == [], "a normal heavy tail in time must not fail preflight"
+
+    pathological_size = _good_episode()
+    pathological_size["cond_z"] = {"size": [-0.4, 97.5, 0.0, 255]}
+    assert any("out of distribution" in f for f in check_episode(pathological_size))
+
+    # price stays tight in practice, so it keeps the strict limit
+    bad_price = _good_episode()
+    bad_price["cond_z"] = {"price": [-0.5, 20.0, 0.0, 255]}
+    assert any("out of distribution" in f for f in check_episode(bad_price))
+
+
+def test_rotate_moves_a_previous_log_aside(tmp_path):
+    """Append-only logs mixed a broken attempt's episodes into a healthy rerun and
+    failed the session on them."""
+    import types
+    from rl_execution.run_session import Session
+
+    log = tmp_path / "preflight.jsonl"
+    log.write_text('{"stale": true}\n')
+    s = Session(types.SimpleNamespace(hours=1.0))
+    s.rotate(str(log))
+    assert not log.exists(), "previous log should have been moved aside"
+    assert list(tmp_path.glob("preflight.jsonl.*.bak")), "previous log should be preserved, not deleted"
