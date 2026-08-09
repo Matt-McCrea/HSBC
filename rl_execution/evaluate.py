@@ -113,33 +113,43 @@ def _stats(shortfalls):
 
 def run_comparison(data_dir="data", symbol="INTC", qtable_path=None, n_seeds=30,
                     depth_noise=0.3, ddim_nsteps=10, out_path="logs/evaluate.jsonl", eval_seed=123,
-                    ckpt_path=None, skip_ddpm=False, max_hours_per_arm=None):
+                    ckpt_path=None, skip_ddpm=False, max_hours_per_arm=None, policies=None):
     """max_hours_per_arm caps the depth-noise arm; the DDPM-100 arm is then matched to
     whatever the depth-noise arm actually used, so total runtime is ~2x the cap. Both arms
     walk the SAME held-out seed list in the same order, so a truncated run is still a
-    like-for-like comparison over however many seeds it reached."""
+    like-for-like comparison over however many seeds it reached.
+
+    `policies` is an ordered {name: policy} mapping so a whole family can share one
+    seed list and one env construction -- TWAP, the Almgren-Chriss schedule at the
+    calibrated kappa, and any number of RL variants. Omit it for the CLI default of
+    TWAP (+ a Q-table if given).
+
+    The DDPM-100 arm deliberately runs the FIRST policy only: that comparison is about
+    the sampler, not the policy, so running the whole family there would multiply the
+    slowest arm's cost for no extra information."""
     arm_budget = max_hours_per_arm * 3600.0 if max_hours_per_arm else None
     seeds = generate_held_out_seeds(data_dir, symbol, n_seeds, seed=eval_seed)
     logger = JsonlLogger(out_path)
 
-    trained_policy = QLearningPolicy.load(qtable_path) if qtable_path else None
-    twap_policy = TWAPPolicy()
+    if policies is None:
+        # Default set kept for backwards compatibility with the CLI.
+        policies = {"twap": TWAPPolicy()}
+        if qtable_path:
+            policies["qlearning"] = QLearningPolicy.load(qtable_path)
 
     results = {}
 
     print(f"\n=== depth-noise arm (DDIM {ddim_nsteps} steps, depth_noise={depth_noise}) ===")
+    print(f"    policies: {', '.join(policies)}")
     env_dn = ExecutionEnv(symbol=symbol, data_dir=data_dir, sampling_type="DDIM",
                            ddim_nsteps=ddim_nsteps, depth_noise=depth_noise, seed_days=None,
                            checkpoint_path=ckpt_path)
-    dn_twap, dn_wallclock, _ = evaluate_policy(env_dn, twap_policy, seeds, logger,
-                                                "eval_depth_noise", "twap", wall_clock_budget=arm_budget)
-    results["depth_noise/twap"] = _stats(dn_twap)
-    if trained_policy is not None:
-        dn_trained, dn_wallclock_trained, _ = evaluate_policy(
-            env_dn, trained_policy, seeds, logger, "eval_depth_noise", "qlearning",
-            wall_clock_budget=arm_budget)
-        results["depth_noise/qlearning"] = _stats(dn_trained)
-        dn_wallclock = max(dn_wallclock, dn_wallclock_trained)
+    dn_wallclock = 0.0
+    for name, policy in policies.items():
+        shortfalls, used, _ = evaluate_policy(env_dn, policy, seeds, logger,
+                                               "eval_depth_noise", name, wall_clock_budget=arm_budget)
+        results[f"depth_noise/{name}"] = _stats(shortfalls)
+        dn_wallclock = max(dn_wallclock, used)
 
     if skip_ddpm:
         # Smoke-test escape hatch: a single DDPM-100 episode is ~10x a depth-noise one,
@@ -151,15 +161,12 @@ def run_comparison(data_dir="data", symbol="INTC", qtable_path=None, n_seeds=30,
     print(f"\n=== DDPM-100 arm (budget-matched to {dn_wallclock:.1f}s) ===")
     env_ddpm = ExecutionEnv(symbol=symbol, data_dir=data_dir, sampling_type="DDPM",
                              depth_noise=0.0, seed_days=None, checkpoint_path=ckpt_path)
-    ddpm_twap, ddpm_wallclock, n_ddpm_twap = evaluate_policy(
-        env_ddpm, twap_policy, seeds, logger, "eval_ddpm100", "twap", wall_clock_budget=dn_wallclock)
-    results["ddpm100/twap"] = _stats(ddpm_twap)
-    results["ddpm100/twap"]["n_episodes_in_budget"] = n_ddpm_twap
-    if trained_policy is not None:
-        ddpm_trained, _, n_ddpm_trained = evaluate_policy(
-            env_ddpm, trained_policy, seeds, logger, "eval_ddpm100", "qlearning", wall_clock_budget=dn_wallclock)
-        results["ddpm100/qlearning"] = _stats(ddpm_trained)
-        results["ddpm100/qlearning"]["n_episodes_in_budget"] = n_ddpm_trained
+    ref_name = next(iter(policies))
+    ddpm_shortfalls, _, n_ddpm = evaluate_policy(
+        env_ddpm, policies[ref_name], seeds, logger, "eval_ddpm100", ref_name,
+        wall_clock_budget=dn_wallclock)
+    results[f"ddpm100/{ref_name}"] = _stats(ddpm_shortfalls)
+    results[f"ddpm100/{ref_name}"]["n_episodes_in_budget"] = n_ddpm
 
     _print_summary(results, seeds, dn_wallclock)
     return results
