@@ -52,6 +52,14 @@ VOL_LOOKBACK = 5  # decision points
 # attribution is by order id.
 EXEC_ORDER_ID_BASE = 900_000_000
 
+# Opts this agent's orders into ORDER_EXECUTED notifications when it is the AGGRESSOR.
+# Upstream ABIDES notifies only the resting side of a match, so an agent that tracks its
+# own remaining inventory from executions never learns that its market order filled --
+# it believes it still holds the stock and the terminal sweep appears to do nothing.
+# Must match OrderBook.NOTIFY_AGGRESSOR_TAGS; the gate is per-tag precisely so
+# WorldAgent (whose orders are untagged) is unaffected.
+AGGRESSOR_TAG = "rl_exec"
+
 
 def signed_cost(qty, price, benchmark, direction):
     """Execution cost of one fill against a benchmark price, sign-matched to
@@ -124,6 +132,7 @@ class RLExecutionAgent(TradingAgent):
         self._order_to_step = {}          # child order id -> decision index that placed it
         self._fills_by_step = {}          # decision index -> [(qty, fill_price), ...]
         self._paid_steps = set()          # steps whose reward has already been handed out
+        self._last_market_step = None     # decision that sent the most recent market order
 
     def getWakeFrequency(self):
         return DECISION_INTERVAL
@@ -182,7 +191,13 @@ class RLExecutionAgent(TradingAgent):
             # Attribute by ORDER ID, not by arrival time: a passive child order can fill
             # after later decisions have been taken, and crediting that fill to whichever
             # decision happened to be current would blame the wrong action.
-            step = self._order_to_step.get(order.order_id, self.decision_index)
+            step = self._order_to_step.get(order.order_id)
+            if step is None:
+                # A market order's fills come back under book-generated ids, so fall back to
+                # the decision that sent it rather than to whatever step is current now --
+                # by the time the fill arrives decision_index has already advanced, which
+                # would credit the trade to the following decision.
+                step = self._last_market_step if self._last_market_step is not None else self.decision_index
             self._fills_by_step.setdefault(step, []).append((order.quantity, order.fill_price))
 
     def querySpread(self, symbol, price, bids, asks, book):
@@ -249,13 +264,18 @@ class RLExecutionAgent(TradingAgent):
         self._next_order_id += 1
         self._order_to_step[order_id] = self.decision_index
         if force_market or level["order_type"] == "market" or best_bid is None or best_ask is None:
-            self.placeMarketOrder(self.symbol, qty, is_buy_order=is_buy, order_id=order_id)
+            # A market order is rebuilt inside the book as fresh limit orders with new ids,
+            # so its fills cannot be matched back by order id. They do arrive within the
+            # same interval, so remember which decision sent it and attribute to that.
+            self._last_market_step = self.decision_index
+            self.placeMarketOrder(self.symbol, qty, is_buy_order=is_buy, order_id=order_id,
+                                  tag=AGGRESSOR_TAG)
             return
         own_best = best_bid if is_buy else best_ask
         opp_best = best_ask if is_buy else best_bid
         price = opp_best if level["price_cross"] else own_best
         self.placeLimitOrder(self.symbol, qty, is_buy_order=is_buy, limit_price=price,
-                             order_id=order_id)
+                             order_id=order_id, tag=AGGRESSOR_TAG)
 
     def _cancel_outstanding(self):
         """Cancel any child order still resting from an earlier decision point.

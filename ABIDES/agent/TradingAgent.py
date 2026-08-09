@@ -340,7 +340,10 @@ class TradingAgent(FinancialAgent):
       :param ignore_risk (bool):  Determines whether cash or risk limits should be enforced or ignored for the order
       :return:
     """
-    order = MarketOrder(self.id, self.currentTime, symbol, quantity, is_buy_order, order_id)
+    # tag was accepted and then dropped here, so a market order silently lost it.
+    # placeLimitOrder already forwards its tag; this makes the two consistent, and it
+    # matters because tags now gate aggressor execution notifications (see OrderBook).
+    order = MarketOrder(self.id, self.currentTime, symbol, quantity, is_buy_order, order_id, tag)
     if quantity > 0:
       # compute new holdings
       new_holdings = self.holdings.copy()

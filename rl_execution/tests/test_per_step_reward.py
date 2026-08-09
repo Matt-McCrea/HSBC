@@ -127,16 +127,23 @@ def test_terminal_sweep_forces_a_market_order():
             self._order_to_step = {}
             self.symbol = "INTC"
 
-        def placeMarketOrder(self, symbol, qty, is_buy_order, order_id=None):
-            placed.append(("market", qty))
+        # Signatures mirror TradingAgent's, including `tag` -- the aggressor-notification
+        # opt-in travels on it, so a spy that silently ignored it would let a regression
+        # in tag plumbing pass unnoticed.
+        def placeMarketOrder(self, symbol, qty, is_buy_order, order_id=None, tag=None):
+            placed.append(("market", qty, tag))
 
-        def placeLimitOrder(self, symbol, qty, is_buy_order, limit_price, order_id=None):
-            placed.append(("limit", qty))
+        def placeLimitOrder(self, symbol, qty, is_buy_order, limit_price, order_id=None, tag=None):
+            placed.append(("limit", qty, tag))
 
     passive = next(i for i, lv in enumerate(ACTION_LEVELS) if lv["order_type"] == "limit")
 
+    from rl_execution.execution_agent import AGGRESSOR_TAG
+
     Spy()._place_child_order(passive, 500, 339900, 340100, force_market=False)
     assert placed[-1][0] == "limit", "non-terminal passive action should still rest a limit"
+    assert placed[-1][2] == AGGRESSOR_TAG, "child orders must carry the aggressor tag"
 
     Spy()._place_child_order(passive, 500, 339900, 340100, force_market=True)
-    assert placed[-1] == ("market", 500), "terminal sweep must market-order the remainder"
+    assert placed[-1] == ("market", 500, AGGRESSOR_TAG), \
+        "terminal sweep must market-order the remainder, tagged so its fills are reported"

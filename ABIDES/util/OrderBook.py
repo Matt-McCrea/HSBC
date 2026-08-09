@@ -15,6 +15,14 @@ from scipy.sparse import dok_matrix
 from tqdm import tqdm
 
 
+# Orders carrying one of these tags get an ORDER_EXECUTED notification sent to the
+# AGGRESSOR as well as to the resting counterparty (see handleLimitOrder). Opt-in by
+# tag so existing agents, whose orders are untagged, are bit-for-bit unaffected.
+# handleMarketOrder must propagate the tag, or a market order loses its opt-in when it
+# is rebuilt as marketable limit orders.
+NOTIFY_AGGRESSOR_TAGS = frozenset({"rl_exec"})
+
+
 class OrderBook:
 
     # An OrderBook requires an owning agent object, which it will use to send messages
@@ -84,7 +92,22 @@ class OrderBook:
                 log_print("SENT: notifications of order execution to agents {} and {} for orders {} and {}",
                           filled_order.agent_id, matched_order.agent_id, filled_order.order_id, matched_order.order_id)
 
-                #self.owner.sendMessage(order.agent_id, Message({"msg": "ORDER_EXECUTED", "order": filled_order}))
+                # Upstream ABIDES notifies only the RESTING side of a match (the line below);
+                # the aggressor is never told its own order executed. That is survivable for
+                # agents that infer their fills some other way, but it silently breaks any
+                # agent that tracks remaining inventory from its own executions: a market
+                # order fills in the book while the sender still believes it holds the stock.
+                #
+                # Notifying the aggressor unconditionally would change WorldAgent's behaviour
+                # -- it appends every ORDER_EXECUTED into the order-history it conditions the
+                # diffusion model on, so it would suddenly see its own aggressive orders as
+                # extra type-4 events and generate differently, invalidating comparison with
+                # every previously recorded run. So the notification is opt-in per order, via
+                # a tag, and orders that do not carry it (i.e. all existing agents') behave
+                # exactly as before.
+                if getattr(order, "tag", None) in NOTIFY_AGGRESSOR_TAGS:
+                    self.owner.sendMessage(order.agent_id,
+                                           Message({"msg": "ORDER_EXECUTED", "order": filled_order}))
                 self.owner.sendMessage(matched_order.agent_id, Message({"msg": "ORDER_EXECUTED", "order": matched_order}))
 
                 # Accumulate the volume and average share price of the currently executing inbound trade.
@@ -183,7 +206,12 @@ class OrderBook:
         log_print("{} placing market order as multiple limit orders", order.symbol, order.quantity)
         for lo in limit_orders.items():
             p, q = lo[0], lo[1]
-            limit_order = LimitOrder(order.agent_id, order.time_placed, order.symbol, q, order.is_buy_order, p, tag='market_order')
+            # Carry the sender's tag through instead of overwriting it with 'market_order'
+            # whenever it opts into aggressor notification -- otherwise a market order
+            # silently loses that opt-in here, which is exactly the case that matters most
+            # (a market order is guaranteed to be the aggressor).
+            child_tag = order.tag if getattr(order, "tag", None) in NOTIFY_AGGRESSOR_TAGS else 'market_order'
+            limit_order = LimitOrder(order.agent_id, order.time_placed, order.symbol, q, order.is_buy_order, p, tag=child_tag)
             self.handleLimitOrder(limit_order)
 
 

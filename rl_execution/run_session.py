@@ -94,11 +94,33 @@ class Session:
         print("\n".join(report), flush=True)
 
         if not (ok and passed):
-            # The per-step reward / cancellation / forced-market paths are the new ones;
-            # _v2's terminal-reward configuration is the one with 154 completed episodes.
-            self.fallback("preflight", "invariant checks failed" if ok else "preflight run crashed",
-                           "terminal reward mode (the _v2 configuration proven on GPU)")
-            cfg["reward_mode"] = "terminal"
+            # Match the fallback to the FAILURE. The first version of this switched to
+            # terminal rewards for any preflight failure, which was useless the one time
+            # it fired: the real fault was unsold inventory (the aggressor never being told
+            # its own order filled), and reward mode has no bearing on that. A fallback
+            # that does not address the fault is worse than none, because it looks handled.
+            text = " ".join(report).lower()
+            attribution_fault = "attribution" in text
+            environment_fault = ("liquidation incomplete" in text or "over-execution" in text)
+
+            if attribution_fault and not environment_fault:
+                self.fallback("preflight", "per-step reward attribution failed",
+                               "terminal reward mode (the _v2 configuration proven on GPU)")
+                cfg["reward_mode"] = "terminal"
+            elif environment_fault:
+                # No configuration fixes this; it is a defect in how orders or fills are
+                # handled. Say so plainly rather than quietly training on broken episodes.
+                self.fallback("preflight",
+                               "ENVIRONMENT FAULT: inventory is not being liquidated / fills are "
+                               "not being accounted. No reward configuration fixes this -- the "
+                               "session will continue so the booking is not wasted, but treat "
+                               "every downstream number as suspect until this is resolved",
+                               "unchanged configuration, results flagged untrustworthy")
+                self.state["results_trustworthy"] = False
+            else:
+                self.fallback("preflight", "invariant checks failed (conditioning out of range "
+                               "or run error)", "unchanged configuration, results flagged")
+                self.state["results_trustworthy"] = False
         self.state["config"].update(cfg)
         self.record("preflight", passed=bool(ok and passed), n_failures=len(report) - 1)
         self.save()

@@ -191,3 +191,46 @@ def test_preflight_tolerates_terminal_reward_mode():
     for step in rec["trajectory"][:-1]:
         step["r"] = 0.0
     assert check_episode(rec, reward_mode="terminal") == []
+
+
+# ------------------------------------------- orchestrator fallback routing
+
+def _session():
+    import types
+    from rl_execution.run_session import Session
+    args = types.SimpleNamespace(hours=72.0, train_hours=26.0, reserve_hours=20.0,
+                                 sampler_hours=10.0, calibration_episodes=12, eval_seeds=20,
+                                 epsilon_decay=0.99, target_kappa_t=2.0, depth_noise=0.3,
+                                 symbol="INTC", ckpt_path="fake.ckpt")
+    return Session(args)
+
+
+def _preflight_decision(report_lines):
+    """Replays the routing logic in stage_preflight against a canned report."""
+    text = " ".join(report_lines).lower()
+    attribution = "attribution" in text
+    environment = ("liquidation incomplete" in text or "over-execution" in text)
+    if attribution and not environment:
+        return "terminal_reward"
+    if environment:
+        return "flag_untrustworthy"
+    return "flag_other"
+
+
+def test_environment_fault_does_not_masquerade_as_a_reward_mode_problem():
+    """The live failure: three episodes left inventory unsold because the aggressor was
+    never told its own order filled. Switching to terminal rewards does nothing for
+    that, and pretending it is handled is worse than leaving it visible."""
+    report = ["PREFLIGHT FAILED", "  - terminal liquidation incomplete: 2407 shares unsold"]
+    assert _preflight_decision(report) == "flag_untrustworthy"
+
+
+def test_attribution_fault_does_switch_reward_mode():
+    report = ["PREFLIGHT FAILED", "  - per-step rewards sum to 1.0 but -shortfall is 2.0 "
+                                   "-- attribution is not preserving the total"]
+    assert _preflight_decision(report) == "terminal_reward"
+
+
+def test_conditioning_fault_is_flagged_not_silently_reconfigured():
+    report = ["PREFLIGHT FAILED", "  - cond_z[size] out of distribution (min=-0.4 max=97.5)"]
+    assert _preflight_decision(report) == "flag_other"
