@@ -181,3 +181,121 @@ The cleanest framing, and the one the evidence supports:
 The single-day, single-checkpoint design of Phase 1 is a strength for the question it answers and
 would be a weakness for the question Phase 2 answers — which is exactly why the design changed.
 Saying so explicitly is better than letting an examiner ask why the diagnosis rests on one day.
+
+---
+
+## Methodology facts — verified against source
+
+*Added 2026-08-09 to close specific gaps in the methodology chapter. Every value below was read
+from the code, not recalled; file and line given so each can be re-checked.*
+
+### Train / validation / test split
+
+`constants.py:271` → `SPLIT_RATES = (.85, .05, .10)`, applied **by trading day** (not by sample) in
+`preprocessing/LOBSTERDataBuilder.py:225-234`. Files are enumerated with `sorted(os.listdir(path))`
+(lines 79, 84), and LOBSTER filenames begin with the date, so the split is **chronological and
+sequential**. For 20 days:
+
+| Split | Index | Days | Dates |
+|---|---|---|---|
+| train | 0–16 | 17 | 2015-01-02 → 2015-01-27 |
+| validation | 17 | 1 | 2015-01-28 |
+| **test** | **18–19** | **2** | **2015-01-29, 2015-01-30** |
+
+**The evaluation days are the held-out test days**, and they coincide with the two days TRADES
+declares as its test set — so the comparison against their released output is like-for-like on a set
+neither model trained on.
+
+⚠️ **One qualification to state.** The 20-day cross-day stability sweep runs on *every* day,
+including the 17 training days. So the **fidelity** results on 0129/0130 are out-of-sample, while
+the **stability** result is partly in-sample. That is defensible — stability under closed-loop
+rollout is not the quantity the model was fitted to, and a model can be trained on a day and still
+diverge on it — but it should be said rather than left for a reader to notice.
+
+### `val_ema`
+
+The number in every checkpoint filename. It is the **validation loss evaluated under
+exponential-moving-average weights**, averaged over validation batches:
+
+- `diffusion_engine.py:62` — `ExponentialMovingAverage(self.parameters(), decay=0.999)`, updated
+  every training step (line 223)
+- `diffusion_engine.py:287` — validation runs inside `with self.ema.average_parameters()`
+- `diffusion_engine.py:303` — `loss_ema = sum(val_ema_losses) / len(val_ema_losses)`
+
+The loss itself is the hybrid diffusion objective, `L_simple + L_vlb`. Lower is better; it is the
+quantity `ModelCheckpoint` and `EarlyStopping` monitor (`run.py:129`, patience 6, min_delta 0.005).
+
+**It is not a fidelity measure**, which is the whole point of §5.2.6 — it selects on denoising
+accuracy, not on simulator behaviour.
+
+### Hyperparameters (all from `configuration.py`)
+
+| Parameter | Value | Line |
+|---|---|---|
+| learning rate | 2.5e-4 | 56 |
+| batch size (train / test) | 256 / 512 | 54–55 |
+| conditional dropout | 0.1 | 72 |
+| epochs configured | 50 (stopped at 5) | 57 |
+| **sequence length `N`** | **256** | 66 |
+| masked sequence size (events generated at a time) | 1 | 67 |
+| augmenter | MLP, dim 64 | 24, 94 |
+| CDT depth | 8 | 81 |
+| CDT MLP ratio | 4 | 82 |
+| **CDT attention heads** | **1** | 83, and see below |
+| diffusion steps `T` | **100** | 74 |
+| noise schedule | cosine, offset **s = 0.008**, `max_beta = 0.99` | `utils/utils.py:15-33` |
+| conditioning | concatenation, `full` (LOB levels) | 87–90 |
+
+`CDT_DEPTH = 8` builds **8 blocks alternating self-attention and cross-attention**
+(`models/diffusers/TRADES/Transformer.py:22`), not 8 self-attention blocks.
+
+### ⚠️ Attention heads: **1**, not 2
+
+`run.py:169` overwrites the config value on the TRADES path:
+
+```python
+config.HYPER_PARAMETERS[CDT_NUM_HEADS] = aug_dim // 64
+```
+
+`AUGMENT_DIM = 64`, so `64 // 64 = **1**` — which also matches the `configuration.py:83` default and
+the `au_64` field in every checkpoint filename. **A claim of "two attention heads" is incorrect** and
+should be corrected to one.
+
+### Scheduled-sampling lineage: resumed, not trained from scratch
+
+`run.py:89-101`. With `RESUME_TRAINING_FLAG` present, training resumes via Lightning's
+`trainer.fit(ckpt_path=...)`, which restores **weights, optimizer state and epoch counter** from the
+newest checkpoint. The SS lineage therefore continues the `0.724` run rather than starting fresh —
+"resumed" is more accurate than "fine-tuned", since the optimizer state is not reset.
+
+Related, and worth a clause: `constants.py:42` notes `current_epoch` resets on resume, which is why
+the gradual ramp was dropped (`SS_RAMP_FRAC = 0.0`) in favour of one teacher-forced epoch then full
+strength.
+
+### The rollout-sampler correction
+
+`SAMPLING_TYPE` defaulted to `"DDPM"`, so an earlier scheduled-sampling run generated its
+self-conditioning with the 100-step schedule rather than the 10-step DDIM used at simulation time.
+Corrected in **`bb87b79` (2026-07-31)**; the adopted checkpoint comes from the subsequent pure-DDIM
+retrain.
+
+State this. The claim "the rollout sampler matches deployment" is true of the adopted checkpoint
+*because of* that fix, and saying so makes the claim verifiable rather than merely asserted.
+
+### File-gated flags are unrecoverable from artefacts
+
+`UNCLAMP_DEPTH_FLAG` and `PRICE_REANCHOR_FLAG` are set by the **presence of a file** in the repo
+root (`constants.py:17, 28`). They appear in no command line, no run directory name and no output
+file. Two consequences, both worth stating:
+
+1. They must match between training and simulation — a model trained under them requires them at
+   simulation time.
+2. **They cannot be recovered from a completed run.** Provenance depends on the launching script, so
+   any reproduction must set them explicitly.
+
+### Not recorded anywhere in the repository
+
+**Training hardware and wall-clock duration.** No training log retains epoch timings. What is known
+from session records: recent work ran on an RTX 4070 (16 GB); earlier training used the UCL CS
+GPU boxes (`cream`/`vanilla`, sm_75). Supply the specific machine and duration from your own notes —
+this cannot be reconstructed from the repository.
