@@ -96,10 +96,20 @@ class Session:
         self.banner("STAGE 0 - preflight")
         cfg = {"reward_mode": "per-step", "reward_benchmark": "arrival",
                "inventory_penalty": 0.0, "alpha_mode": "visit-count"}
+        if self.args.preflight_episodes <= 0:
+            # Skipping is legitimate when the environment was already validated on this
+            # exact code, but it is recorded: "validated in a prior run" is a different
+            # claim from "validated at session start", and the write-up should not have
+            # to guess which one applies.
+            print("[session] preflight SKIPPED by request (--preflight-episodes 0)", flush=True)
+            self.state["config"].update(cfg)
+            self.record("preflight", passed=None, skipped=True,
+                        note="skipped by request; environment not re-validated this session")
+            return cfg
         log = "logs/preflight.jsonl"
         self.rotate(log)
         ok = self.run("benchmark", [
-            "--n-episodes", 3, "--out", log, "--run-name", "preflight",
+            "--n-episodes", self.args.preflight_episodes, "--out", log, "--run-name", "preflight",
             "--reward-mode", cfg["reward_mode"], "--reward-benchmark", cfg["reward_benchmark"],
             "--ckpt-path", self.args.ckpt_path, "--depth-noise", self.args.depth_noise,
         ], "preflight_run")
@@ -283,6 +293,9 @@ if __name__ == "__main__":
     p.add_argument("--reserve-hours", type=float, default=20.0,
                    help="wall-clock held back from training for evaluation")
     p.add_argument("--sampler-hours", type=float, default=10.0)
+    p.add_argument("--preflight-episodes", type=int, default=3,
+                   help="0 skips preflight entirely (recorded as skipped). Each episode "
+                        "costs ~18 min with a high-activity checkpoint")
     p.add_argument("--calibration-episodes", type=int, default=12)
     p.add_argument("--eval-seeds", type=int, default=20)
     p.add_argument("--epsilon-decay", type=float, default=0.99)
