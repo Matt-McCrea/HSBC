@@ -182,3 +182,70 @@ for the robustness table.
 1. **The 41 tk / 14 tk range conflict** in §3 — same run, two conventions. Resolve before print.
 2. **Seed 32** is measured but unpulled, so the seed table reads as n=2 rather than n=3.
 3. **The 2-hour result rests on one day** until the 0130 pair is scored.
+
+---
+
+## Appendix — recomputed from the CSVs, one convention
+
+*All rows below: **1-second bars, 15-minute warm-up discarded**, computed 2026-08-10 from the
+local CSVs in `ABIDES/log/paper_runs_downloaded/`. This is the single-convention table that
+resolves the range conflict noted above.*
+
+| day | window end | seed | sampler | mids | range | 1s vol | VR(60s) | flow L/C/E |
+|---|---|---|---|---|---|---|---|---|
+| 02 | 10:00 | 30 | DDIM-10 | 13 | 6 tk | 1.97 | 0.059 | 51.8/42.2/6.0 |
+| 05 | 10:00 | 30 | DDIM-10 | 19 | 9 tk | 1.88 | 0.072 | 51.8/40.3/7.9 |
+| 06 | 10:00 | 30 | DDIM-10 | 18 | 9 tk | 1.28 | 0.084 | 53.7/36.5/9.8 |
+| 07 | 10:00 | 30 | DDIM-10 | 14 | 7 tk | 2.02 | 0.058 | 51.9/40.3/7.8 |
+| 08 | 10:00 | 30 | DDIM-10 | 19 | 9 tk | 2.01 | 0.093 | 51.6/40.8/7.5 |
+| 09 | 10:00 | 30 | DDIM-10 | 17 | 8 tk | 1.88 | 0.110 | 51.9/41.5/6.6 |
+| 12 | 10:00 | 30 | DDIM-10 | 13 | 6 tk | 1.85 | 0.022 | 52.1/40.4/7.5 |
+| 13 | 10:00 | 30 | DDIM-10 | 11 | 5 tk | 1.38 | 0.113 | 52.8/40.2/6.9 |
+| 14 | 10:00 | 30 | DDIM-10 | 14 | 7 tk | 1.30 | 0.234 | 52.5/40.4/7.1 |
+| 15 | 10:00 | 30 | DDIM-10 | 10 | 5 tk | 1.20 | 0.100 | 53.8/39.1/7.1 |
+| 16 | 10:00 | 30 | DDIM-10 | 13 | 6 tk | 1.56 | 0.172 | 52.9/39.2/7.9 |
+| 20 | 10:00 | 30 | DDIM-10 | 11 | 5 tk | 1.34 | 0.101 | 52.8/39.7/7.5 |
+| 21 | 10:00 | 30 | DDIM-10 | 10 | 5 tk | 1.52 | 0.122 | 52.7/40.7/6.6 |
+| 22 | 10:00 | 30 | DDIM-10 | 10 | 5 tk | 1.59 | 0.032 | 52.6/40.3/7.1 |
+| 23 | 10:00 | 30 | DDIM-10 | 23 | 11 tk | 1.84 | 0.072 | 51.9/40.4/7.7 |
+| 26 | 10:00 | 30 | DDIM-10 | 14 | 6 tk | 1.71 | 0.142 | 52.3/40.1/7.6 |
+| 27 | 10:00 | 30 | DDIM-10 | 12 | 6 tk | 1.98 | 0.062 | 52.0/40.4/7.7 |
+| 28 | 10:00 | 30 | DDIM-10 | 11 | 5 tk | 1.76 | 0.082 | 52.3/40.4/7.3 |
+| 29 | 10:00 | 30 | DDIM-10 | 25 | 12 tk | 2.05 | 0.100 | 51.9/40.5/7.6 |
+| 30 | 10:00 | 30 | DDIM-10 | 12 | 5 tk | 1.71 | 0.109 | 52.3/40.1/7.5 |
+| 30 | 10:00 | 31 | DDIM-10 | 17 | 8 tk | 1.65 | 0.095 | 52.6/39.8/7.6 |
+| **29** | **12:00** | 30 | **DDIM-10 (2 h)** | **29** | **14 tk** | **1.77** | **0.098** | 51.6/41.0/7.4 |
+| 29 | 10:00 | 30 | DDPM-100 | 11 | 5 tk | 1.89 | 0.131 | 55.5/29.1/15.4 |
+| 30 | 10:00 | 30 | DDPM-100 | 11 | 5 tk | 1.95 | 0.057 | 55.2/28.9/16.0 |
+| **29** | **10:00** | 30 | **DDIM-10 VANILLA** | **13** | **8 tk** | **0.47** | **0.956** | **52.6/43.3/4.1** |
+| 29 | 10:00 | 30 | DDIM-1 VANILLA | 36 | 18 tk | 3.72 | 0.194 | 45.7/34.9/19.4 |
+
+### The range conflict, resolved
+
+The two-hour run on 2015-01-29 reads **29 mids / 14 tk** under this convention and **62 mids /
+41 tk** in `summary.md`. The difference is the warm-up: `summary.md` computes over the **whole**
+session, this table discards the first 15 minutes. Both are correct; only one should be used.
+The 14 tk figure in `variance_ratio_analysis.md` matches this table, so the variance-ratio work is
+already on the warm-up convention.
+
+### ⚠️ The vanilla row is the one to look at
+
+**Vanilla DDIM-10 on 2015-01-29 reads VR(60 s) = 0.956** — against real's ~0.93–1.05, and against
+the *same checkpoint with decode corrections* at 0.100. Its flow mix is also closer to real
+(52.6/43.3/**4.1** against real's 49/44/**7**, versus the corrected run's 40.5/**7.6**).
+
+That is a nearly ten-fold difference in persistence, on one checkpoint, one day, with the decode
+corrections as the only variable. Taken at face value it says **the mean-reversion pathology is
+introduced by the decode-time corrections, not inherited from the architecture** — which
+contradicts the current framing in `variance_ratio_analysis.md`.
+
+**Treat it as a lead, not a finding, for one specific reason:** the vanilla run is nearly
+frozen — 13 unique mids and 0.47 bp against real's 39 and 1.52. A variance ratio computed on a
+near-constant series is fragile, because both numerator and denominator are small and dominated by
+a handful of jumps. The estimate may be an artefact of quiescence rather than evidence of healthy
+random-walk behaviour.
+
+**How to settle it:** compute VR on the vanilla runs for both checkpoints across several days, and
+check whether VR stays near 1 as activity rises. If a *quiet but not frozen* vanilla run still
+reads ~0.9, the finding is real and §5.7 needs rewriting. If VR degrades as soon as the market is
+active, it is a small-sample artefact and the inherited-pathology framing stands.
