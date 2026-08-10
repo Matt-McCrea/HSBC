@@ -34,6 +34,7 @@ from utils.utils_data import load_compute_normalization_terms
 from rl_execution import coldstart
 from rl_execution.execution_agent import N_DECISIONS, RLExecutionAgent
 from rl_execution.orderbook_reconstructor import DEFAULT_MARKET_OPEN
+from rl_execution.replay_world_agent import ReplayWorldAgent, build_replay_stream
 from rl_execution.rl_world_agent import RLWorldAgent
 
 EPISODE_SECONDS = N_DECISIONS * 30  # 5 minutes, fixed by the spec
@@ -120,24 +121,35 @@ class ExecutionEnv:
     def __init__(self, symbol="INTC", data_dir="data", sampling_type="DDIM", ddim_nsteps=10,
                  depth_noise=0.3, checkpoint_path=None, seed_days=None, Q_range=(1000, 5000),
                  random_state=None, min_seconds_after_open=MIN_SECONDS_AFTER_OPEN,
-                 reward_mode="terminal", reward_benchmark="arrival"):
+                 reward_mode="terminal", reward_benchmark="arrival", world_mode="generative"):
         self.symbol = symbol
         self.data_dir = data_dir
         self.min_seconds_after_open = min_seconds_after_open
         self.reward_mode = reward_mode
         self.reward_benchmark = reward_benchmark
+        # "replay" plays the real message stream from t0 instead of generating one. No
+        # diffusion sampling, so no model is loaded at all and no GPU is touched.
+        self.world_mode = world_mode
         self.depth_noise = depth_noise
         self.sampling_type = sampling_type
         self.ddim_nsteps = ddim_nsteps
         self.Q_range = Q_range
         self.rng = random_state or np.random.RandomState()
 
-        self.model, self.config, self.checkpoint_path = load_model(
-            symbol, sampling_type=sampling_type, ddim_nsteps=ddim_nsteps, checkpoint_path=checkpoint_path)
+        if world_mode == "replay":
+            # Deliberately not loaded: replay must be runnable on a CPU-only machine, and
+            # loading the checkpoint would both waste time and pin a GPU for nothing.
+            self.model, self.config, self.checkpoint_path = None, None, None
+            from configuration import Configuration
+            self.config = Configuration()
+        else:
+            self.model, self.config, self.checkpoint_path = load_model(
+                symbol, sampling_type=sampling_type, ddim_nsteps=ddim_nsteps,
+                checkpoint_path=checkpoint_path)
         # Self-documenting run banner: which checkpoint and sampler produced a given set of
         # numbers is exactly what the Results chapter has to state, and the checkpoint was
         # previously auto-selected and never recorded anywhere.
-        print(f"[ExecutionEnv] checkpoint={self.checkpoint_path}")
+        print(f"[ExecutionEnv] world_mode={world_mode}  checkpoint={self.checkpoint_path}")
         print(f"[ExecutionEnv] sampler={sampling_type} ddim_nsteps={ddim_nsteps} depth_noise={depth_noise}")
         print(f"[ExecutionEnv] reward_mode={reward_mode} benchmark={reward_benchmark}")
         self.normalization_terms = load_compute_normalization_terms(
@@ -211,7 +223,20 @@ class ExecutionEnv:
             stream_history=2_500_000, book_freq=None, wide_book=True,
             random_state=np.random.RandomState(seed=self.rng.randint(0, 2**31)))
 
-        world_agent = RLWorldAgent(
+        if self.world_mode == "replay":
+            stream = build_replay_stream(messages, t0, cs.resting_orders.keys())
+            print(f"[ExecutionEnv] replay stream: {len(stream)} real messages from t0")
+            world_agent = ReplayWorldAgent(
+                id=WORLD_AGENT_ID, name="REPLAY_WORLD_AGENT", type="WorldAgent",
+                symbol=self.symbol, date=str(session_date.date()),
+                date_trading_days=cst.DATE_TRADING_DAYS, model=None, data_dir=self.data_dir,
+                log_orders=False,
+                random_state=np.random.RandomState(seed=self.rng.randint(0, 2**31)),
+                normalization_terms=self.normalization_terms,
+                replay_stream=stream, seed_lob_snapshots=cs.lob_raw,
+                seed_price_anchor=cs.price_anchor)
+        else:
+            world_agent = RLWorldAgent(
             id=WORLD_AGENT_ID, name="WORLD_AGENT", type="WorldAgent", symbol=self.symbol,
             date=str(session_date.date()), date_trading_days=cst.DATE_TRADING_DAYS,
             model=self.model, data_dir=self.data_dir, cond_type=self.config.COND_TYPE,

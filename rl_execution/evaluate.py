@@ -114,7 +114,8 @@ def _stats(shortfalls):
 
 def run_comparison(data_dir="data", symbol="INTC", qtable_path=None, n_seeds=30,
                     depth_noise=0.3, ddim_nsteps=10, out_path="logs/evaluate.jsonl", eval_seed=123,
-                    ckpt_path=None, skip_ddpm=False, max_hours_per_arm=None, policies=None):
+                    ckpt_path=None, skip_ddpm=False, max_hours_per_arm=None, policies=None,
+                    world_mode="generative"):
     """max_hours_per_arm caps the depth-noise arm; the DDPM-100 arm is then matched to
     whatever the depth-noise arm actually used, so total runtime is ~2x the cap. Both arms
     walk the SAME held-out seed list in the same order, so a truncated run is still a
@@ -144,13 +145,19 @@ def run_comparison(data_dir="data", symbol="INTC", qtable_path=None, n_seeds=30,
     print(f"    policies: {', '.join(policies)}")
     env_dn = ExecutionEnv(symbol=symbol, data_dir=data_dir, sampling_type="DDIM",
                            ddim_nsteps=ddim_nsteps, depth_noise=depth_noise, seed_days=None,
-                           checkpoint_path=ckpt_path)
+                           checkpoint_path=ckpt_path, world_mode=world_mode)
     dn_wallclock = 0.0
     for name, policy in policies.items():
         shortfalls, used, _ = evaluate_policy(env_dn, policy, seeds, logger,
                                                "eval_depth_noise", name, wall_clock_budget=arm_budget)
         results[f"depth_noise/{name}"] = _stats(shortfalls)
         dn_wallclock = max(dn_wallclock, used)
+
+    if world_mode == "replay":
+        # There is no sampler to compare in replay: the market is the real one.
+        print("\n=== replay mode: no DDPM arm (the market is real data, not sampled) ===")
+        _print_summary(results, seeds, dn_wallclock)
+        return results
 
     if skip_ddpm:
         # Smoke-test escape hatch: a single DDPM-100 episode is ~10x a depth-noise one,
@@ -195,6 +202,10 @@ if __name__ == "__main__":
     parser.add_argument("--depth-noise", type=float, default=0.3)
     parser.add_argument("--ddim-nsteps", type=int, default=10)
     parser.add_argument("--out", default="logs/evaluate.jsonl")
+    parser.add_argument("--world-mode", choices=["generative", "replay"], default="generative",
+                        help="replay plays the REAL message stream from t0 instead of generating "
+                             "one: no diffusion sampling, so no model is loaded and no GPU is "
+                             "needed. This is the real-data arm")
     parser.add_argument("--ac-kappa", type=float, default=None,
                         help="add an Almgren-Chriss schedule baseline at this kappa*T "
                              "(0 reproduces TWAP; use the value calibration derived)")
@@ -221,4 +232,4 @@ if __name__ == "__main__":
                     n_seeds=args.n_seeds, depth_noise=args.depth_noise, ddim_nsteps=args.ddim_nsteps,
                     out_path=args.out, eval_seed=args.eval_seed, ckpt_path=args.ckpt_path,
                     skip_ddpm=args.skip_ddpm, max_hours_per_arm=args.max_hours_per_arm,
-                    policies=policies)
+                    policies=policies, world_mode=args.world_mode)
