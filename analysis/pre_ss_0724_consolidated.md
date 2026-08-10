@@ -249,3 +249,48 @@ random-walk behaviour.
 check whether VR stays near 1 as activity rises. If a *quiet but not frozen* vanilla run still
 reads ~0.9, the finding is real and §5.7 needs rewriting. If VR degrades as soon as the market is
 active, it is a small-sample artefact and the inherited-pathology framing stands.
+
+---
+
+## Second day and third seed — pulled and scored 2026-08-10
+
+*Same convention as the appendix table: 1-second bars, 15-minute warm-up discarded.*
+
+### Long horizon now rests on two days, not one
+
+| | mids | range | 1s vol | VR(10s) | VR(60s) | VR(300s) | flow L/C/E |
+|---|---|---|---|---|---|---|---|
+| **2 h, 2015-01-30, 0.724** | 21 | 10 tk | 1.40 | 0.309 | **0.106** | 0.038 | 52.1/40.4/7.5 |
+| *2 h, 2015-01-30, real* | *104* | *61 tk* | *1.11* | *0.767* | *0.630* | *0.739* | *49.9/45.8/4.3* |
+| **2 h, 2015-01-29, 0.724** | 29 | 14 tk | 1.77 | 0.300 | **0.098** | 0.027 | 51.6/41.0/7.4 |
+
+**The result replicates.** On both days the model produces roughly a quarter of real's unique
+mid-prices and a fifth of its range, while sitting slightly *above* real on one-second volatility.
+VR(60 s) is **0.098 and 0.106** — an order of magnitude below real on either day. The mean-reversion
+finding is not a property of 2015-01-29.
+
+Two things the second day adds:
+
+- **Real itself varies more than the model does.** Real VR(60 s) is 0.630 on 0130 against ~0.93 on
+  0129; the model reads 0.106 and 0.098. The gap is large on both days, but quoting a single "real
+  ~0.93" understates real's own day-to-day spread — use the matched day.
+- **Over-execution holds across days**: 7.5% and 7.4% against real's 4.3% and ~3–4%.
+
+### Seed robustness — now n = 3
+
+INTC 2015-01-30, 30-minute, checkpoint 0.724:
+
+| seed | mids | range | 1s vol | VR(60s) |
+|---|---|---|---|---|
+| 30 | 12 | 5 tk | 1.71 | 0.109 |
+| 31 | 17 | 8 tk | 1.65 | 0.095 |
+| **32** | **16** | **8 tk** | **1.78** | **0.096** |
+
+Volatility spans 0.13 bp and VR(60 s) spans 0.014 across three seeds. The behaviour is systematic,
+not seed noise — and the claim no longer rests on two runs.
+
+⚠️ **These VR figures differ from the seed table in `variance_ratio_analysis.md`** (which reads
+~0.52 for seed 30 on the same day). That table uses a different warm-up, and a 30-minute session
+leaves only ~15 non-overlapping 60-second blocks post-warm-up, so the estimate is fragile at that
+horizon. This is the caveat that document already states; the two-hour numbers are the trustworthy
+ones. **Do not mix the two tables.**
