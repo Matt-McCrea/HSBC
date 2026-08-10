@@ -194,13 +194,31 @@ state which run each figure comes from.
 real envelope. Pair with the IDDPM learned-variance argument you already have.
 
 ### Q4 — Noise placement, not noise quantity
-**Sources:** `hypothesis_results.md` §`A_HYBRID_PP_DDPM_10`; `new_ckpt.md` §`HYBRID_DDPM_PP_8+2`
-(14 unique mids, exec 3.8%, range 33.870–33.935)
+**Source:** `analysis/churn_results.md`, closed-loop table (ckpt 0.681 row); cross-checked against
+`hypothesis_results.md` §`A_HYBRID_PP_DDPM_10`
 
-⚠️ **Gap.** Your skeleton quotes ~113 unique mids for DDPM-head+ODE-tail and ~5 for the reverse. The
-`HYBRID_DDPM_PP_8+2` block gives 14, not 113 — different checkpoint and configuration. **Locate the
-source of the 113/5 pair before writing this subsection**, or re-derive from whichever run produced
-it. This is the one claim in the six whose numbers I could not verify from retained files.
+**The 113/5 pair is verified and is a same-checkpoint comparison** — ckpt 0.681, INTC 2015-01-30,
+09:30–10:00, real = 69 unique mids:
+
+| sampler | unique mids | neg-depth % |
+|---|---|---|
+| DDPM-100 | 23 | 23.7 |
+| DDIM-10 η=0 (control) | **6** | 2.2 |
+| **HYBRID_DDPM_PP** (DDPM head, ODE tail) | **113** | 35.8 |
+| **HYBRID_PP_DDPM** (ODE head, DDPM tail) | **5** | — |
+
+Two qualifications that make the claim stronger rather than weaker:
+
+- **Checkpoint-dependent.** The same DDPM-head hybrid gives only **12** unique mids on ckpt `0.656`
+  (and 14 in the `HYBRID_DDPM_PP_8+2` variant of `new_ckpt.md`). So placement decides the outcome on
+  0.681 but not universally — consistent with Finding 1 of `churn_results.md`.
+- **113 overshoots real (69) rather than matching it**, at 35.8% negative depth against DDPM's ~24%.
+  The defensible claim is therefore *where the noise goes determines which failure mode you get* —
+  ODE head freezes, DDPM head diverges, neither lands on real — not that the DDPM head works.
+
+⚠️ Do not source this from `hypothesis_results.md` alone: `A_DDIM_20_eta1` in that file reads **112**
+unique mids and is easily mistaken for the 113. It is a twenty-step η=1 run, not a hybrid, and it
+runs away to \$35.74.
 
 ### Q5 — Adjusting DDIM configuration is insufficient
 **Step count** — `ETA_SUMMARY.md` has the ladder on ckpt 0.681: `DDIM10_eta0` (1410 s),
@@ -273,9 +291,10 @@ support the checkpoint-dependence subsection (§5.2.7 in the results plan), not 
 
 ## 9. The three gaps, ranked
 
-1. **Depth-temperature κ sweep figures** — quoted in the results skeleton, source not found. Cheap
+1. **Depth-temperature kappa sweep figures** — quoted in the results skeleton, source not found. Cheap
    to re-run (three 30-min cells) and the switch-not-dial contrast deserves a real citation.
-2. **Head/tail 113-vs-5 pair** — the retained hybrid block gives 14, not 113. Verify before writing.
+2. ~~Head/tail 113-vs-5 pair~~ — **RESOLVED 2026-08-10.** Verified in `churn_results.md`: same
+   checkpoint (0.681), same day, 113 vs 5. See Q4 above for the two qualifications.
 3. **`depth_pre_drop` / `size_pre_drop` for the original freeze run** — not emitted at the time.
    Substitute the `cancel_sweep_table.md` histogram and say which run it came from, or re-run
    DDIM-10 η=0 on 0.681 with stdout captured.
