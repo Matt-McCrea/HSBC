@@ -151,9 +151,50 @@ faster.**
 
 ---
 
-## What needs pulling — one run
+## Long horizon on BOTH days — added 2026-08-10
 
-Everything above is local. The single gap:
+*1-second bars, 15-minute warm-up. The 2015-01-30 run was pulled and scored after the tables above.*
+
+| run | mids | range | 1s vol | nz% | VR(10s) | VR(60s) | VR(300s) | flow L/C/E |
+|---|---|---|---|---|---|---|---|---|
+| **SS e4, 0129** | 57 | 28 tk | 1.35 | 31% | 0.205 | **0.047** | 0.016 | 52.3/33.9/13.9 |
+| **SS e4, 0130** | 27 | 13 tk | 1.32 | 34% | 0.234 | **0.054** | 0.008 | 53.0/34.6/12.4 |
+| 0.724, 0129 | 29 | 14 tk | 1.77 | — | 0.300 | **0.098** | 0.027 | 51.6/41.0/7.4 |
+| 0.724, 0130 | 21 | 10 tk | 1.40 | 39% | 0.309 | **0.106** | 0.038 | 52.1/40.4/7.5 |
+| *real, 0130* | *104* | *61 tk* | *1.11* | *14%* | *0.767* | *0.630* | *0.739* | *49.9/45.8/4.3* |
+
+**SS epoch 4 survives two hours on both days**, and its VR replicates closely (0.047 / 0.054), so the
+long-horizon claim no longer rests on a single day.
+
+### ⚠️ The head-to-head is genuinely mixed — read before choosing the final model
+
+On **both** days at the two-hour horizon:
+
+| | SS epoch 4 | 0.724 | closer to real |
+|---|---|---|---|
+| LOB-Bench grand mean (0129) | **0.257** | 0.355 | **SS** |
+| activity — unique mids | **57 / 27** | 29 / 21 | **SS** |
+| range | **28 / 13 tk** | 14 / 10 tk | **SS** |
+| **variance ratio VR(60s)** | 0.047 / 0.054 | **0.098 / 0.106** | **0.724 — by ~2×** |
+| execution share | 13.9 / 12.4% | **7.4 / 7.5%** | **0.724** (real 4.3%) |
+| cancel share | 33.9 / 34.6% | **41.0 / 40.4%** | **0.724** (real 45.8%) |
+
+**The baseline has roughly twice the persistence of the adopted model at long horizon, consistently
+on both days** — and the variance ratio is the diagnostic built specifically to catch what LOB-Bench
+cannot see. The baseline is also markedly closer to real on both flow components.
+
+So the two models differ on *which* axis they are realistic on: SS wins distributional fidelity and
+activity; the baseline wins price-path persistence and flow composition. This is not a case of one
+model dominating, and the choice depends on the intended downstream use — a point that matters
+directly for the reinforcement-learning execution task, where persistence and execution share are
+the properties an agent trades against.
+
+---
+
+## What needs pulling
+
+**Nothing — all runs are now local**, including the two-hour 2015-01-30 run pulled on 2026-08-10.
+The original gap, for the record:
 
 ```
 world_agent_INTC_2015-01-30_12-00-00_30_DDIM_0.0_10_val_ema=0.69__tdprior_sr_dn0.3
@@ -171,8 +212,9 @@ tar czf ~/ss4_2h_0130.tgz \
 
 ## Open items
 
-1. **The 2-hour SS result rests on 2015-01-29** until the above is pulled. The 0.724 baseline
-   already has both days (VR 0.098 and 0.106).
+1. ~~The 2-hour SS result rests on 2015-01-29~~ — **RESOLVED**: both days now scored, VR 0.047 and
+   0.054. See the head-to-head section above, which surfaces a persistence result favouring the
+   baseline.
 2. **The book-balancing lever** improves persistence at 2 h but is not in the adopted configuration
    and has no cross-day evidence. Decision deferred.
 3. **Type-decode `l1` vs `prior` on this checkpoint** has never been measured — see
