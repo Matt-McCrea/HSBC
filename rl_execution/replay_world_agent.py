@@ -41,6 +41,7 @@ import pandas as pd
 
 from agent.WorldAgent import WorldAgent
 from rl_execution.coldstart import MESSAGE_COLUMNS
+from rl_execution.rl_world_agent import fresh_order_id_pool
 
 # LOBSTER event types that never touch the visible book (hidden execution, cross
 # trade, halt) -- matching WorldAgent._preprocess_events_for_market_replay.
@@ -88,6 +89,10 @@ class ReplayWorldAgent(WorldAgent):
         self.next_historical_orders_index = 0
         self.lob_snapshots = list(seed_lob_snapshots)
         self.last_offset_time = 0.0
+        # Replay places REAL orders under their real ids, so keeping the market orders it
+        # creates for type-4 executions out of that range matters here even more than in
+        # the generative arm. See WORLD_ORDER_ID_BASE.
+        self.unused_order_ids = fresh_order_id_pool()
         # Replay never generates, so it never leaves this window.
         self.starting_time_diffusion = "157780min"
 

@@ -108,6 +108,10 @@ if __name__ == "__main__":
                              "reward variance). Reported shortfall is always vs arrival either way")
     parser.add_argument("--ckpt-path", default=None,
                         help="exact TRADES checkpoint to simulate with; default = lowest val-loss for the symbol")
+    parser.add_argument("--world-mode", choices=["generative", "replay"], default="generative",
+                        help="replay plays the REAL message stream from t0 rather than "
+                             "generating one: no diffusion, so no model is loaded and no GPU "
+                             "is needed. Use it to run the same policy against the real market")
     parser.add_argument("--out", default="logs/benchmark.jsonl")
     parser.add_argument("--run-name", default="benchmark")
     args = parser.parse_args()
@@ -115,5 +119,6 @@ if __name__ == "__main__":
     env = ExecutionEnv(symbol=args.symbol, data_dir=args.data_dir, sampling_type=args.sampling_type,
                         ddim_nsteps=args.ddim_nsteps, depth_noise=args.depth_noise,
                         checkpoint_path=args.ckpt_path,
-                        reward_mode=args.reward_mode, reward_benchmark=args.reward_benchmark)
+                        reward_mode=args.reward_mode, reward_benchmark=args.reward_benchmark,
+                        world_mode=args.world_mode)
     run_benchmark(env, args.n_episodes, run_name=args.run_name, out_path=args.out)

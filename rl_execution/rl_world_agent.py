@@ -23,6 +23,27 @@ import pandas as pd
 
 from agent.WorldAgent import WorldAgent
 
+# Fresh order ids for orders the world agent creates itself.
+#
+# WorldAgent draws these from setdiff1d(arange(0, 5e6), historical_order_ids), which
+# relies on having loaded the whole day to know what to exclude. Both agents here skip
+# that load deliberately (see _load_orders_lob), so the exclusion list is empty and the
+# pool starts at 0 -- straight into the range real LOBSTER ids occupy (measured on this
+# dataset: 10,751 .. 410,586,408).
+#
+# It has not actually collided: at the earliest t0 the env will pick (open + 30 min) the
+# lowest id resting in the seeded book is 37,201, against order-of-1e3 fresh ids consumed
+# per episode. But a ~6x margin that depends on how long an episode runs and how early t0
+# falls is not a margin worth keeping when disjointness can just be made structural.
+# 5e8 sits above every real id and below EXEC_ORDER_ID_BASE (9e8), so world orders, real
+# orders and execution-agent orders occupy three non-overlapping bands by construction.
+WORLD_ORDER_ID_BASE = 500_000_000
+WORLD_ORDER_ID_POOL = 1_000_000
+
+
+def fresh_order_id_pool():
+    return np.arange(WORLD_ORDER_ID_BASE, WORLD_ORDER_ID_BASE + WORLD_ORDER_ID_POOL)
+
 
 class RLWorldAgent(WorldAgent):
 
@@ -41,6 +62,8 @@ class RLWorldAgent(WorldAgent):
         # cancel the RL agent's resting child orders -- unrealistic (nobody else can cancel
         # your order in a real market) and it would silently corrupt execution results.
         self.protected_agent_ids = set(protected_agent_ids)
+        # Disjoint from real ids and from the execution agent's; see WORLD_ORDER_ID_BASE.
+        self.unused_order_ids = fresh_order_id_pool()
         # WorldAgent only ever sets self.last_offset_time inside the replay loop (or when the
         # rarely-used fix_time flag is on) -- never in __init__. Since replay never runs here,
         # it would otherwise stay unset until the first ORDER_ACCEPTED/EXECUTED/CANCELLED
