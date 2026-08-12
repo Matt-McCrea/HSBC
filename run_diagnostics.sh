@@ -68,7 +68,13 @@ run() {
   local name="$1"; shift
   local log="logs_diag/${name}.log"
   mkdir -p logs_diag
-  [ -e "$log" ] && { echo "SKIP $name (log exists)"; return 0; }
+  # Never skip on an existing log. A crashed run leaves a zero-byte file, and
+  # skipping on that made every later invocation a no-op. Move it aside instead
+  # so nothing is lost and nothing is silently not run.
+  if [ -e "$log" ]; then
+    mv "$log" "${log%.log}.$(date +%H%M%S).old.log"
+    echo "  (previous log moved aside)"
+  fi
   say "RUN $name"
   flags_show
   local t0=$SECONDS
