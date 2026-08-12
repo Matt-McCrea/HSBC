@@ -157,19 +157,46 @@ def format_report(a):
     for h, f in sorted(a["permanent"].items()):
         L.append(f"  {h:>9} {h * DECISION_SECONDS:>8.0f} {_f(f['slope']):>12} "
                  f"{_f(f['t']):>8} {_f(f['r2']):>8} {f['n']:>7}")
-    slopes = [(h, f["slope"]) for h, f in sorted(a["permanent"].items()) if f["slope"] is not None]
-    if len(slopes) >= 2 and slopes[0][1]:
-        decay = slopes[-1][1] / slopes[0][1]
-        L.append(f"  retained at h={slopes[-1][0]} vs h={slopes[0][0]}: {decay:.0%}"
-                 "   (<100% = the move partly reverts, i.e. some impact was transient)")
+    # Retention is a ratio of two regression slopes, so it is only meaningful when both
+    # are actually distinguishable from zero and share a sign. On a log where every
+    # horizon is insignificant and the signs alternate, the ratio is noise over noise:
+    # gamma(1)=-0.019 and gamma(5)=+0.020 print as "-105% retained", which reads like a
+    # measured full reversal and is really just two zeros with different rounding.
+    fits = [(h, f) for h, f in sorted(a["permanent"].items()) if f["slope"] is not None]
+    if len(fits) >= 2:
+        (h0, f0), (h1, f1) = fits[0], fits[-1]
+        significant = all(abs(f.get("t") or 0.0) >= 2.0 for f in (f0, f1))
+        same_sign = (f0["slope"] > 0) == (f1["slope"] > 0)
+        if significant and same_sign and f0["slope"]:
+            decay = f1["slope"] / f0["slope"]
+            L.append(f"  retained at h={h1} vs h={h0}: {decay:.0%}"
+                     "   (<100% = the move partly reverts, i.e. some impact was transient)")
+        else:
+            L.append("  retention not reported: permanent impact is not distinguishable from zero "
+                     "at both\n  horizons, so their ratio would describe noise rather than decay.")
 
     s = a["sqrt_law"]
     L.append("")
     L.append("SQUARE-ROOT LAW    slippage vs sqrt(shares)")
     L.append(f"  slope            : {_f(s['slope'])}   t={_f(s['t'])}  R^2={_f(s['r2'])}")
     if s["r2"] is not None and t["r2"] is not None:
-        better = "square-root" if s["r2"] > t["r2"] else "linear"
-        L.append(f"  better fit       : {better} (compare R^2 {_f(s['r2'])} vs {_f(t['r2'])})")
+        # Both forms are near-collinear over the size range a single parent order spans,
+        # so their R^2 land within a hair of each other and whichever is nominally higher
+        # flips between logs -- linear on the 114-episode training log (0.1973 vs 0.1943),
+        # square-root on the 54-episode evaluation log (0.1175 vs 0.1128). Declaring a
+        # winner on a margin of ~0.005 would put an unsupported claim in the write-up, so
+        # only call it when the gap is big enough to survive that.
+        gap = abs(s["r2"] - t["r2"])
+        if gap < 0.02:
+            L.append(f"  better fit       : INDISTINGUISHABLE (R^2 {_f(s['r2'])} vs {_f(t['r2'])}, "
+                     f"gap {gap:.4f})")
+            L.append("                     Do not report either functional form as supported: over "
+                     "one parent\n                     order's size range the two are near-collinear, "
+                     "and which one leads\n                     flips between logs.")
+        else:
+            better = "square-root" if s["r2"] > t["r2"] else "linear"
+            L.append(f"  better fit       : {better} (compare R^2 {_f(s['r2'])} vs {_f(t['r2'])}, "
+                     f"gap {gap:.4f})")
 
     L.append("")
     L.append("CAVEAT: permanent impact here is the price response ASSOCIATED with our trade,")
