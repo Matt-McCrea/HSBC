@@ -57,6 +57,10 @@ need_off() {
   for f in "${FLAGS[@]}"; do
     [ -e "$f" ] && die "$f present. Old checkpoints were trained without it. Run: $0 check"
   done
+  # MUST return 0 explicitly. Without this the loop's final failing [ -e ] test
+  # becomes the function's exit status, and under `set -e` bash exits silently
+  # -- in the case where everything is CORRECT and no flag is present.
+  return 0
 }
 
 # run <logname> <extra args...>
