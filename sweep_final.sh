@@ -45,7 +45,12 @@ CK_FINAL="$CKDIR/val_ema=0.69_epoch=4_INTC_se_256_au_64_CD_8_seed_30.ckpt"
 
 TICKER=INTC
 SEED=30
-RUN_TIMEOUT=2400            # 40 min per run
+# Per-run wall-clock cap. NOT 40 min: that was the checkpoint-search cap on the
+# RTX 4070, where DDIM-10 costs ~11.7 ms/order. On the UCL box the same run
+# measures ~54.8 ms/order and a 30-minute session takes ~55 min, so a 40-minute
+# cap would kill every run. Override with RUN_TIMEOUT=... if the box changes.
+RUN_TIMEOUT="${RUN_TIMEOUT:-7200}"          # 2 h, DDIM-10 sessions
+RUN_TIMEOUT_DDPM="${RUN_TIMEOUT_DDPM:-10800}"   # 3 h, DDPM-100 is ~10x the NN work
 CORR="--depth-noise 0.3 --size-reshape --type-decode prior"
 
 # The 20 January 2015 trading days.
@@ -68,10 +73,14 @@ sim() {
   if [ -e "$done" ]; then note "skip  $name (already completed)"; return 0; fi
   [ -e "$log" ] && mv "$log" "${log%.log}.$(date +%H%M%S).old.log"
 
-  note "START $name"
+  # DDPM-100 runs get the longer cap.
+  local cap="$RUN_TIMEOUT"
+  case " $* " in *" -type DDPM "*|*" -nsteps 100 "*) cap="$RUN_TIMEOUT_DDPM";; esac
+
+  note "START $name (cap ${cap}s)"
   local t0; t0=$(date +%s)
 
-  timeout "$RUN_TIMEOUT" python -u ABIDES/abides.py -c world_agent_sim \
+  timeout "$cap" python -u ABIDES/abides.py -c world_agent_sim \
     -t "$TICKER" -date "$date" -st "$st" -et "$et" -d True -m TRADES \
     -seed "$SEED" "$@" 2>&1 | tee "$log"
   local rc=${PIPESTATUS[0]}
@@ -80,7 +89,7 @@ sim() {
   if [ "$rc" -eq 0 ]; then
     touch "$done"; note "DONE  $name (${dt}s)"
   elif [ "$rc" -eq 124 ]; then
-    note "TIMEOUT $name (${dt}s, cap ${RUN_TIMEOUT}s) -- continuing"
+    note "TIMEOUT $name (${dt}s, cap ${cap}s) -- continuing"
   else
     note "FAIL  $name (exit $rc, ${dt}s) -- see $log"
   fi
