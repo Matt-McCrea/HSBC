@@ -150,6 +150,10 @@ month() {
   note "=== PHASE month-$label complete ==="
 }
 
+# NOT in `all` (dropped 2026-08-12): month-final does the same step-count
+# ablation on the checkpoint actually shipped, which is the comparison that
+# matters. Still callable as `./sweep_final.sh month-corr` if the baseline
+# month is wanted too.
 phase_month_corr()    { month corr    -type DDPM -nsteps 100 -eta 0.0 --ckpt-path "$CK_BASE" $CORR; }
 phase_month_vanilla() { month vanilla -type DDPM -nsteps 100 -eta 0.0 --ckpt-path "$CK_BASE"; }
 # Step-count ablation on the model actually shipped, rather than on the
@@ -197,10 +201,10 @@ phase_predictive() {
       note "  predictive: $1 NOT FOUND ($2)"
     fi
   }
-  add ddim1     "$L/world_agent_INTC_2015-01-29_10-00-00_30_DDIM_0.0_1_*"
-  add ddpm100   "$L/world_agent_INTC_2015-01-29_10-00-00_30_DDPM_0.0_100_*"
-  add repaired  "$L/world_agent_INTC_2015-01-29_10-00-00_30_DDIM_0.0_10_val_ema=0.724*tdprior_sr_dn0.3"
-  add final     "$L/world_agent_INTC_2015-01-29_10-00-00_30_DDIM_0.0_10_val_ema=0.69*tdprior_sr_dn0.3"
+  add inherited_ddim1        "$L/world_agent_INTC_2015-01-29_10-00-00_30_DDIM_0.0_1_*"
+  add inherited_ddpm100      "$L/world_agent_INTC_2015-01-29_10-00-00_30_DDPM_0.0_100_*"
+  add ours_0724_fixed        "$L/world_agent_INTC_2015-01-29_10-00-00_30_DDIM_0.0_10_val_ema=0.724*tdprior_sr_dn0.3"
+  add ours_ss_e4_fixed       "$L/world_agent_INTC_2015-01-29_10-00-00_30_DDIM_0.0_10_val_ema=0.69*tdprior_sr_dn0.3"
 
   if [ ${#args[@]} -eq 0 ]; then note "SKIP predictive: no generated files matched"; return 0; fi
 
@@ -246,8 +250,8 @@ case "${1:-all}" in
   month-final)    phase_month_final ;;
   longhorizon)    phase_longhorizon ;;
   predictive)     phase_predictive ;;
-  all)            phase_fills; phase_month_corr; phase_month_final; \
-                  phase_predictive; phase_longhorizon; phase_month_vanilla ;;
+  all)            phase_fills; phase_month_final; phase_predictive; \
+                  phase_longhorizon; phase_month_vanilla ;;
   summary)        summary; exit 0 ;;
   *) sed -n '3,30p' "$0"; exit 1 ;;
 esac
