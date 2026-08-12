@@ -84,3 +84,39 @@ def test_report_runs_and_names_every_policy(tmp_path):
     text, res = report(load([_write_log(tmp_path)]), baseline="twap")
     assert "PAIRED vs twap" in text and "qlearning" in text
     assert not res.empty
+
+
+def _mixed_log(tmp_path, n_seeds, seed=1):
+    """One policy clearly worse, one indistinguishable -- the case that produced a
+    self-contradicting summary (a significant policy reported as 'no separation')."""
+    rng = np.random.RandomState(seed)
+    path = tmp_path / "mixed.jsonl"
+    with open(path, "w") as f:
+        for i in range(n_seeds):
+            drift = rng.normal(0, DRIFT_SD_BPS)
+            for name, effect in (("twap", 0.0), ("ac_k2", 6.0), ("qlearning", 0.05)):
+                bps = drift + effect + rng.normal(0, 0.5)
+                f.write(json.dumps({
+                    "seed_day": "2015-01-2%d" % (i % 10), "t0": 40000.0 + i,
+                    "side": "SELL", "Q": 2000 + i, "policy_name": name,
+                    "p_arrival": P_ARRIVAL, "shortfall": bps / 10_000.0 * P_ARRIVAL,
+                    "shortfall_bps": bps,
+                }) + "\n")
+    return str(path)
+
+
+def test_a_significant_policy_is_never_reported_as_no_separation(tmp_path):
+    text, res = report(load([_mixed_log(tmp_path, 18)]), baseline="twap")
+    assert res[res["policy"] == "ac_k2"].iloc[0]["p"] < 0.05
+    assert "No policy separates" not in text, "contradicts the table above it"
+    assert "Significantly worse than twap: ac_k2" in text
+
+
+def test_small_paired_samples_are_flagged(tmp_path):
+    text, _ = report(load([_mixed_log(tmp_path, 4)]), baseline="twap")
+    assert "CAUTION" in text and "n=4" in text
+
+
+def test_no_caution_when_the_sample_is_adequate(tmp_path):
+    text, _ = report(load([_mixed_log(tmp_path, 18)]), baseline="twap")
+    assert "CAUTION" not in text

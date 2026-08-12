@@ -26,7 +26,7 @@ from rl_execution.qlearning import QLearningPolicy, TWAPPolicy
 
 
 def generate_held_out_seeds(data_dir, symbol, n_seeds, seq_len=256, episode_seconds=300,
-                             Q_range=(1000, 5000), seed=123, seed_days=None,
+                             Q_range=(1000, 5000), seed=123, seed_days=None, side=None,
                              min_seconds_after_open=env_module.MIN_SECONDS_AFTER_OPEN):
     """A fixed list of (seed_day, t0, side, Q) tuples, generated once with a
     dedicated RandomState so the SAME held-out set is reused across every
@@ -48,9 +48,14 @@ def generate_held_out_seeds(data_dir, symbol, n_seeds, seq_len=256, episode_seco
                  DEFAULT_MARKET_OPEN + min_seconds_after_open)
         hi = float(messages["time"].iloc[-1]) - episode_seconds - 5
         t0 = float(rng.uniform(lo, hi))
-        side = str(rng.choice(["BUY", "SELL"]))
+        # rng.choice is consumed either way so that forcing a side does not shift the
+        # rest of the draw: the same seed list keeps identical days, t0s and Qs, and only
+        # the side changes. Without this, --side would silently produce a different
+        # market sample and stop being comparable with the mixed-side run.
+        drawn = str(rng.choice(["BUY", "SELL"]))
+        side_i = side or drawn
         Q = int(rng.randint(Q_range[0], Q_range[1]))
-        seeds.append({"seed_day": day, "t0": t0, "side": side, "Q": Q})
+        seeds.append({"seed_day": day, "t0": t0, "side": side_i, "Q": Q})
     return seeds
 
 
@@ -115,7 +120,7 @@ def _stats(shortfalls):
 def run_comparison(data_dir="data", symbol="INTC", qtable_path=None, n_seeds=30,
                     depth_noise=0.3, ddim_nsteps=10, out_path="logs/evaluate.jsonl", eval_seed=123,
                     ckpt_path=None, skip_ddpm=False, max_hours_per_arm=None, policies=None,
-                    world_mode="generative"):
+                    world_mode="generative", side=None):
     """max_hours_per_arm caps the depth-noise arm; the DDPM-100 arm is then matched to
     whatever the depth-noise arm actually used, so total runtime is ~2x the cap. Both arms
     walk the SAME held-out seed list in the same order, so a truncated run is still a
@@ -130,7 +135,7 @@ def run_comparison(data_dir="data", symbol="INTC", qtable_path=None, n_seeds=30,
     the sampler, not the policy, so running the whole family there would multiply the
     slowest arm's cost for no extra information."""
     arm_budget = max_hours_per_arm * 3600.0 if max_hours_per_arm else None
-    seeds = generate_held_out_seeds(data_dir, symbol, n_seeds, seed=eval_seed)
+    seeds = generate_held_out_seeds(data_dir, symbol, n_seeds, seed=eval_seed, side=side)
     logger = JsonlLogger(out_path)
 
     if policies is None:
@@ -202,6 +207,12 @@ if __name__ == "__main__":
     parser.add_argument("--depth-noise", type=float, default=0.3)
     parser.add_argument("--ddim-nsteps", type=int, default=10)
     parser.add_argument("--out", default="logs/evaluate.jsonl")
+    parser.add_argument("--side", choices=["BUY", "SELL"], default=None,
+                        help="force every held-out seed to this side. The default mixed "
+                             "list drew 14 BUY / 4 SELL at seed 123, while training ran "
+                             "--side SELL and the Q-state carries no side feature -- so the "
+                             "table is applied out of distribution on most eval episodes. "
+                             "Use --side SELL to measure it on the side it was trained for")
     parser.add_argument("--world-mode", choices=["generative", "replay"], default="generative",
                         help="replay plays the REAL message stream from t0 instead of generating "
                              "one: no diffusion sampling, so no model is loaded and no GPU is "
@@ -232,4 +243,4 @@ if __name__ == "__main__":
                     n_seeds=args.n_seeds, depth_noise=args.depth_noise, ddim_nsteps=args.ddim_nsteps,
                     out_path=args.out, eval_seed=args.eval_seed, ckpt_path=args.ckpt_path,
                     skip_ddpm=args.skip_ddpm, max_hours_per_arm=args.max_hours_per_arm,
-                    policies=policies, world_mode=args.world_mode)
+                    policies=policies, world_mode=args.world_mode, side=args.side)

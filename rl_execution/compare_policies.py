@@ -134,18 +134,30 @@ def report(df, baseline="twap", metric="shortfall_bps"):
           f"(unpaired would be {r['se_unpaired']:.3f})")
 
     A("\nREADING THIS")
-    best = res.iloc[0]
-    if best["mean_diff"] > 0 and best["p"] < 0.05:
-        A(f"  Every policy tested is significantly WORSE than {baseline}. With 114 training")
-        A("  episodes over a 55-state table that is a legitimate result, not a bug: TWAP is")
-        A("  the risk-neutral Almgren-Chriss optimum, so beating it requires either exploitable")
-        A("  structure or risk aversion the agent had too little data to find.")
-    elif best["p"] >= 0.05:
+    sig = res[res["p"] < 0.05]
+    worse, better = sig[sig["mean_diff"] > 0], sig[sig["mean_diff"] < 0]
+    n_min = int(res["n"].min())
+
+    if len(better):
+        for _, r in better.iterrows():
+            A(f"  {r['policy']} BEATS {baseline} by {-r['mean_diff']:.2f} bps (p={r['p']:.4f}).")
+    if len(worse) == len(res):
+        A(f"  Every policy tested is significantly WORSE than {baseline}. That is a legitimate")
+        A("  result rather than a bug: TWAP is the risk-neutral Almgren-Chriss optimum, so")
+        A("  beating it needs either exploitable structure or risk aversion, and a tabular")
+        A("  agent trained for ~10^2 episodes has too little data to find either.")
+    elif len(worse):
+        A(f"  Significantly worse than {baseline}: {', '.join(worse['policy'])}.")
+        A(f"  Not separated at 5%: {', '.join(res[res['p'] >= 0.05]['policy']) or 'none'}.")
+    elif not len(better):
         A(f"  No policy separates from {baseline} at the 5% level. State the confidence")
-        A("  interval rather than 'no difference' -- with n=18 the interval is wide enough")
-        A("  that a modest effect could not have been detected either way.")
-    else:
-        A(f"  {best['policy']} beats {baseline} by {-best['mean_diff']:.2f} bps (p={best['p']:.4f}).")
+        A("  interval rather than 'no difference': the interval below is wide enough that a")
+        A("  modest effect could not have been detected either way.")
+
+    if n_min < 8:
+        A(f"  CAUTION: the smallest paired sample here is n={n_min}. Treat every p-value in")
+        A("  this block as indicative only -- at that size the test has little power and the")
+        A("  estimate moves a lot with any single seed.")
     A("=" * 78)
     return "\n".join(lines), res
 
