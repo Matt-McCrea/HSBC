@@ -335,7 +335,9 @@ def preprocess_data(dataframes, n_lob_levels, chosen_model):
         # UNCLAMP_DEPTH found zero negatives in real data regardless of the clamp (confirmed via
         # scripts/check_raw_depth_distribution.py: 0.00% negative before this fix, 0.91% of LIMIT
         # events after).
-        index = j - 1
+        # DEPTH_INDEX_FIX=0 restores the original self-referential index for
+        # event_type==1, i.e. the published TRADES behaviour.
+        index = (j - 1) if (cst.DEPTH_INDEX_FIX or event_type != 1) else j
 
         if direction == 1:
             bid_price = bid_sides[index, 0]

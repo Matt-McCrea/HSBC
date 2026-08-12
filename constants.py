@@ -27,6 +27,16 @@ UNCLAMP_DEPTH = (os.environ.get("UNCLAMP_DEPTH", "0") == "1") or os.path.exists(
 # File flag, not just env (env vars silently failed twice on this remote).
 PRICE_REANCHOR = (os.environ.get("PRICE_REANCHOR", "0") == "1") or os.path.exists("PRICE_REANCHOR_FLAG")
 
+# Depth is measured against the orderbook snapshot BEFORE the event (row j-1).
+# The original TRADES pipeline used index=j for event_type==1, which is
+# self-referential: a marketable order that rests its own remainder becomes the
+# best quote it is compared against, washing depth to 0 instead of negative.
+# That is why 0.00% of real depths were negative before the fix and 0.91% of
+# LIMIT events after (scripts/check_raw_depth_distribution.py).
+# DEFAULT ON so every existing run is unaffected. Set DEPTH_INDEX_FIX=0 to
+# reproduce the published behaviour for a TRADES-default baseline.
+DEPTH_INDEX_FIX = (os.environ.get("DEPTH_INDEX_FIX", "1") == "1")
+
 # Scheduled-sampling retrain (Stage 3, v1). During training, with a scheduled probability, replace the
 # real conditioning order-history with the model's OWN generated block (self-generated cond_orders),
 # keep the real book state, and train against the real NEXT block. This exposes the model to its own
