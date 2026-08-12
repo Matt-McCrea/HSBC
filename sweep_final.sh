@@ -152,6 +152,24 @@ month() {
 
 phase_month_corr()    { month corr    -type DDPM -nsteps 100 -eta 0.0 --ckpt-path "$CK_BASE" $CORR; }
 phase_month_vanilla() { month vanilla -type DDPM -nsteps 100 -eta 0.0 --ckpt-path "$CK_BASE"; }
+# Step-count ablation on the model actually shipped, rather than on the
+# pre-retrain baseline it is currently established on.
+phase_month_final()   { month final   -type DDPM -nsteps 100 -eta 0.0 --ckpt-path "$CK_FINAL" $CORR; }
+
+# ------------------------------------------- phase: extra long-horizon ------
+# The two-hour claim rests on two days, while 5.4.3 makes cross-day discipline a
+# stated contribution. Each extra day is ~1 h.
+LONGDAYS=("${LONGDAYS[@]:-20150107 20150123 20150116}")
+phase_longhorizon() {
+  note "=== PHASE longhorizon (${#LONGDAYS[@]} days, 2 h each) ==="
+  for d in ${LONGDAYS[@]}; do
+    sim "long_final_${d}" "$d" 10:00:00 12:00:00 \
+        -type DDIM -nsteps 10 -eta 0.0 --ckpt-path "$CK_FINAL" $CORR
+    sim "long_base_${d}"  "$d" 10:00:00 12:00:00 \
+        -type DDIM -nsteps 10 -eta 0.0 --ckpt-path "$CK_BASE" $CORR
+  done
+  note "=== PHASE longhorizon complete ==="
+}
 
 # -------------------------------------------------- phase: predictive -------
 # All four configurations against one real day, with the shared real-on-real
@@ -225,8 +243,11 @@ case "${1:-all}" in
   fills)          phase_fills ;;
   month-corr)     phase_month_corr ;;
   month-vanilla)  phase_month_vanilla ;;
+  month-final)    phase_month_final ;;
+  longhorizon)    phase_longhorizon ;;
   predictive)     phase_predictive ;;
-  all)            phase_fills; phase_month_corr; phase_month_vanilla; phase_predictive ;;
+  all)            phase_fills; phase_month_corr; phase_month_final; \
+                  phase_predictive; phase_longhorizon; phase_month_vanilla ;;
   summary)        summary; exit 0 ;;
   *) sed -n '3,30p' "$0"; exit 1 ;;
 esac
