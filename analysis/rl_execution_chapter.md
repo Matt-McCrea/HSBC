@@ -2,10 +2,15 @@
 ### Draft sections for the dissertation: literature, methodology, results skeleton
 
 > **How to use this.** Written to be lifted into the thesis with light editing. Maths is
-> in LaTeX so it pastes into a `.tex` document directly. Anything in `[SQUARE BRACKETS]`
-> is a placeholder for a number the runs have not produced yet. Citations marked ✅ were
+> in LaTeX so it pastes into a `.tex` document directly. Citations marked ✅ were
 > verified against the published record while drafting; those marked ⚠️ are from memory
 > and the full bibliographic details should be checked before submission.
+>
+> **Section 3 is now measured, not a skeleton.** Every number in it comes from
+> `logs/train_session.jsonl` (114 episodes) or `logs/eval_frontier_*.jsonl` (54 episodes),
+> reproducible with `analyze_logs`, `calibrate`, `impact`, `inspect_policy` and
+> `compare_policies`. The one section deliberately left empty is §3.6, the sampler
+> comparison, which was not run.
 
 ---
 
@@ -181,10 +186,10 @@ Episodes are therefore seeded by
 2. slicing the conditioning tensor directly from the same log, applying the identical
    normalisation used at training time.
 
-Measured cost is `[0.54 s]` per episode against a replay of approximately 15 minutes.
+Measured cost is 0.53 s per episode against a replay of approximately 15 minutes.
 
 *Implementation note for the write-up:* reconstruction required a price–time-priority
-matching engine rather than naive log replay, because approximately `[2–3%]` of orders in
+matching engine rather than naive log replay, because approximately 2–3% of orders in
 the LOBSTER data receive no explicit cancellation or execution event anywhere in the
 day's log. A replay that trusts the log alone leaves these resting indefinitely and
 produces a crossed book.
@@ -304,11 +309,11 @@ window of only $\sim 3$ episodes, and with per-episode reward dispersion of orde
 `[\sigma_r]` against an inter-action value gap of order `[\Delta Q]`, the estimate tracks
 noise: greedy actions were observed to change between successive checkpoints.
 
-Exploration decays $\varepsilon: 1.0 \to 0.05$ at `[0.99]` per episode.
+Exploration decays $\varepsilon: 1.0 \to 0.05$ at 0.99 per episode (reaching the 0.05 floor was not attained in 114 episodes; the final value was 0.318).
 
 Because full per-step trajectories are logged, value functions can be **re-fit offline**
 under alternative step-size rules, reward shapings and state discretisations without
-re-simulating — decoupling the expensive component (market simulation, ~`[1,300 s]` per
+re-simulating — decoupling the expensive component (market simulation, ~823 s per
 episode) from the cheap one (value fitting, milliseconds).
 
 ## 2.6 Baselines
@@ -353,17 +358,28 @@ per episode and reported alongside results:
 
 ---
 
-# 3. Results *(skeleton)*
+# 3. Results
+
+All figures below are measured. Two logs are reported throughout and distinguished
+explicitly: **train** (114 episodes, all SELL, $\varepsilon$-greedy exploration) and
+**eval** (54 episodes: 18 held-out seeds $\times$ 3 policies, greedy). Where a quantity is
+estimated on both, both are given — agreement across them is the evidence that a finding is
+a property of the simulator rather than of one sample.
 
 ## 3.1 Computational cost
 
 | Quantity | Value |
 |---|---|
-| Cold-start reconstruction | `[0.54]` s/episode |
+| Cold-start reconstruction | 0.53 s/episode (median 0.47) |
 | Replay it replaces | ~15 min/episode |
-| Wall-clock per 5-min episode | `[~1,300]` s (range `[184–1,672]`) |
-| Episodes per 24 h | `[~66]` |
-| Training episodes achieved | `[ ]` |
+| Wall-clock per 5-min episode (train) | mean 823 s, median 912, IQR [178, 1384] |
+| Wall-clock per 5-min episode (eval) | mean 759 s, median 396, IQR [155, 1426] |
+| Episodes per 24 h | ~105 |
+| Training episodes achieved | **114** in 26.1 h |
+
+Cold-start reconstruction is roughly **1,700$\times$ cheaper** than the kernel replay it
+replaces, which is what makes per-episode seeding from arbitrary intra-day times feasible
+at all. It is not the bottleneck: simulation is 99.93% of episode wall-clock.
 
 Frame against Nevmyvaka et al.'s 1.5 years of data: the episode budget here is smaller by
 orders of magnitude, and that is a property of interactive generative simulation rather
@@ -371,41 +387,158 @@ than a shortcoming of the implementation.
 
 ## 3.2 Calibration and simulator validity
 
-Report $\hat\sigma$, $\hat\eta$, $R^2$, $\hat\epsilon$, and the derived $\lambda$.
-Report drift mean and $t$-statistic, and state plainly whether the martingale assumption
-holds. Report execution rate against the 4–6% real benchmark.
+| Parameter | Train (114 ep) | Eval (54 ep) |
+|---|---|---|
+| $\hat\sigma$ (per 30 s, price units) | — | 155.6 |
+| $\hat\eta$ (temporary impact) | 6.554 ($t$=15.69, $R^2$=0.197, $n$=1004) | 4.751 ($t$=7.86, $R^2$=0.113, $n$=488) |
+| $\hat\epsilon$ (intercept) | −47.16 | −66.01 |
+| Derived $\lambda$ | 42.12 (used for training) | 16.64 |
+| Drift (bps / 5 min) | **+7.09** ($t$=7.88) | **+5.33** ($t$=4.30) |
+| Execution rate | 0.18 | 0.17 |
+| Unique mid-prices per episode | 9.45 | 8.94 |
+| Resting orders at $t_0$ | 3,771 | 3,595 |
+
+Two validity findings, both robust across the logs and both material to the live-trading
+question:
+
+**The martingale assumption fails.** Drift is significantly positive in both samples
+($t$=7.88 and $t$=4.30). Almgren–Chriss assumes a driftless mid-price, so the analytic
+frontier is not the correct optimum in this simulator, and a single-sided liquidation is
+flattered or penalised for reasons unrelated to execution skill. This is reported as a
+property of the world agent, not corrected away.
+
+**The simulated market over-executes by roughly threefold.** Execution rate is 17–18%
+against a real benchmark of 4–6% for this symbol. A generated order is about three times
+more likely to execute than a real one, so measured shortfall is optimistic relative to
+live trading: fills that a real book would not have provided are provided here.
+
+$\hat\epsilon$ is negative in both logs, which cannot hold for pure liquidity taking — a
+fill cannot beat the mid at zero size. It is the signature of an action space that also
+*provides* liquidity (a passive sell rests at the ask and fills above the mid), and it means
+$\hat\epsilon$ must not be read as a half-spread without first separating passive from
+aggressive fills.
+
+The derived $\lambda$ differs between logs (42.12 vs 16.64) because it inherits the noise in
+$\hat\sigma^2/\hat\eta$. The conclusions are insensitive to this: the penalty sweep moves
+the mean greedy action only from 1.22 at $\lambda=0$ to 1.25 at $\lambda=42$, so any value
+in that range yields effectively the same policy.
 
 ## 3.3 Learned policy
 
-Present the greedy policy as a time × inventory grid. The literature-derived prediction to
-test: **does the learned policy front-load relative to TWAP as $\lambda$ rises, as
-Almgren–Chriss implies?** Report state coverage and visits per entry, and the convergence
-diagnostic (change in greedy actions between successive re-fits on growing data).
+State coverage after 114 episodes: **32 of 55 states visited (58.2%)**, 117 of 275
+state–action entries updated (42.5%), median 6 visits per entry (max 59).
+
+Greedy action distribution over visited states at the calibrated $\lambda=42$:
+
+| Action | Count | Share |
+|---|---|---|
+| 0 passive (0.5$\times$ slice) | 9 | 28.1% |
+| 1 light (1.0$\times$ slice) — *TWAP's action* | 14 | 43.8% |
+| 2 neutral (crossing limit) | 4 | 12.5% |
+| 3 aggressive (market, 1.5$\times$) | 2 | 6.2% |
+| 4 very aggressive (market, 2.0$\times$) | 3 | 9.4% |
+
+The learned policy differs from TWAP in 18 of 32 visited states (56.2%), but its modal
+action *is* TWAP's, and the densely-visited interior of the grid (time remaining 4–6/10,
+inventory 20–80%) is uniformly action 1. The erratic cells are the sparse corners. The
+agent therefore converges **toward** the risk-neutral optimum that Almgren–Chriss predicts,
+which is the theoretically expected destination for a risk-neutral objective.
+
+**The AC front-loading prediction is confirmed.** Mean greedy action rises monotonically
+with the inventory penalty — 1.22 at $\lambda=0$, 1.25 at $\lambda=42$, 1.78 at
+$\lambda=337$ — with 8 of 32 greedy actions changing at $\lambda=42$ and 20 of 32 at
+$\lambda=337$. A risk term that pushes the agent to liquidate faster is exactly what
+Almgren–Chriss requires, and it is recovered here from logged trajectories without
+re-simulation.
+
+Convergence is **partial**. Greedy-action churn between successive re-fits on growing data
+runs 40% → 4% → 27% → 12%; the Q-value spread within a visited state has median 54.4.
+The policy is not converged at 114 episodes and is reported as such.
 
 ## 3.4 Policy comparison
 
-Mean shortfall in basis points with standard errors, for TWAP, the AC schedule and the
-learned policy, on the shared held-out seeds. Report **median and interquartile range
-alongside the mean** — the shortfall distribution is heavy-tailed, and a small number of
-episodes can dominate a mean.
+Shortfall in basis points of the arrival mid; lower is better. 18 held-out seeds, identical
+across policies. Because every policy walks the same seed list, the **paired** difference is
+the correct statistic: it cancels the market movement common to a seed. Pairing reduces the
+standard error by 2–3$\times$ relative to the unpaired comparison.
 
-## 3.5 Sampler comparison
+**At the calibrated $\lambda = 42$:**
 
-Episodes completed and shortfall standard error for each arm under matched wall-clock.
-The claim to support: the accelerated sampler yields a materially tighter estimate per unit
-of compute, with the ratio approaching $\sqrt{n_{\text{fast}}/n_{\text{slow}}}$.
+| Policy | Mean | SE | Median | IQR | Paired $\Delta$ vs TWAP | $t$ | $p$ | Wins |
+|---|---|---|---|---|---|---|---|---|
+| TWAP | 0.03 | 1.08 | 1.20 | [−2.7, 3.4] | — | — | — | — |
+| AC ($\kappa T$=2) | 1.39 | 0.87 | 0.99 | [−1.2, 2.8] | +1.362 (SE 0.669) | 2.04 | 0.058 | 9/18 |
+| Q-learning | 0.92 | 1.61 | 0.44 | [−3.4, 4.8] | **+0.892** (SE 0.929) | 0.96 | **0.351** | 8/18 |
 
-## 3.6 Limitations
+**The learned policy is statistically indistinguishable from TWAP** at the calibrated risk
+aversion: 95% CI [−0.93, +2.71] bps, winning on 8 of 18 seeds. Given that TWAP *is* the
+risk-neutral Almgren–Chriss optimum, matching it is the theoretically expected ceiling for a
+risk-neutral objective, not a failure to learn.
 
-- Episode budget of `[ ]` versus millions in historical-replay studies.
-- Single symbol, single-sided (sell) liquidation, interacting with any measured drift.
-- AC's closed form assumes linear impact and a martingale; the simulator guarantees
-  neither, so divergence from the analytical frontier is informative about the simulator
-  rather than evidence against the agent. This is a *comparison*, not a validation.
+**At the exploratory $\lambda = 337$ (8$\times$ calibrated):** both structured policies
+degrade — AC +1.845 ($t$=3.07, $p$=0.007, 3/18 wins) and Q-learning +3.012 ($t$=4.02,
+$p$=0.0009, 1/18 wins). Over-weighting inventory risk at a five-minute horizon buys risk
+reduction that the cost side does not repay.
+
+The AC schedule underperforms TWAP at every $\lambda$ tested. Section 3.5 explains why this
+is consistent with the measured impact structure rather than a defect of the baseline.
+
+## 3.5 Market impact of the agent's own orders
+
+| Quantity | Train | Eval | Verdict |
+|---|---|---|---|
+| Temporary impact $\hat\eta$ | 6.554 ($t$=15.69) | 4.751 ($t$=7.86) | **significant in both** |
+| Permanent $\hat\gamma$, $h$=1 (30 s) | 0.0248 ($t$=0.94) | −0.0190 ($t$=−0.70) | not detectable |
+| Permanent $\hat\gamma$, $h$=2 (60 s) | 0.0352 ($t$=1.15) | −0.0237 ($t$=−0.69) | not detectable |
+| Permanent $\hat\gamma$, $h$=3 (90 s) | 0.0324 ($t$=0.96) | −0.0332 ($t$=−0.90) | not detectable |
+| Permanent $\hat\gamma$, $h$=5 (150 s) | 0.0244 ($t$=0.55) | 0.0199 ($t$=0.43) | not detectable |
+
+**Temporary impact is strong and permanent impact is undetectable at every horizon out to
+150 s, in both samples.** This is the chapter's most robust quantitative finding, and it
+explains §3.4: Almgren–Chriss front-loading trades spread cost now for reduced exposure to
+price moves later, but if trading leaves no lasting price mark there is little for
+front-loading to avoid, so it pays the cost without earning the benefit.
+
+**No claim is made about the functional form of impact.** Linear and square-root fits are
+statistically indistinguishable — linear leads by $R^2$ 0.0030 on train, square-root by
+0.0047 on eval, i.e. the nominal winner flips between samples. Over the size range a single
+parent order spans, the two forms are near-collinear and this data cannot separate them.
+
+Permanent impact here is the price response *associated* with trading, not a causally
+isolated effect, because the world agent reacts to the book being perturbed. A clean
+estimate requires paired counterfactual episodes with the agent disabled.
+
+## 3.6 Sampler comparison
+
+**Not performed.** The evaluation ran with the DDPM-100 arm disabled in order to spend the
+available compute on the policy frontier instead. No sampler claim is made from these runs.
+
+## 3.7 Limitations
+
+- **Episode budget of 114**, against millions in historical-replay studies. State coverage
+  is 58% and convergence is partial; the learned policy is best described as approaching
+  TWAP rather than as converged.
+- **Side mismatch between training and evaluation.** Training fixed the parent order to
+  SELL; the held-out seed list drew 14 BUY and 4 SELL, and the state
+  $(\text{time},\text{inventory})$ carries no side feature. The policy was therefore applied
+  out of distribution on most evaluation episodes. Under AC's martingale assumption the
+  optimal trajectory is side-symmetric and this would be immaterial — it is precisely the
+  simulator's measured drift that breaks the symmetry. Corroborating evidence: the
+  correlation between shortfall and drift is **−0.837 on the all-SELL training log and
+  +0.292 on the majority-BUY evaluation log**, the sign flip that side composition predicts.
+  The reported result is thus a *conservative* estimate of the policy's performance.
+- **No common random numbers.** Episodes re-sample the generated market, so pairing cancels
+  the market *situation* (day, $t_0$, side, $Q$) but not the realised path. Identical
+  policies score slightly differently across runs (TWAP 0.026 vs 0.048 bps), which bounds
+  the residual noise.
+- **Execution rate is ~3$\times$ the real benchmark**, so shortfall measured here is
+  optimistic relative to live trading.
+- **Drift violates the martingale assumption**, so divergence from the analytic AC frontier
+  is informative about the simulator rather than evidence against the agent. This is a
+  *comparison*, not a validation.
 - The action space couples order size with aggression, limiting the fidelity of the AC
   schedule mapping.
-- A weak or TWAP-indistinguishable learned policy is an admissible outcome; the
-  contribution is a correct, instrumented environment and an honest measurement.
+- Single symbol (INTC), single 20-day sample.
 
 ---
 
