@@ -68,9 +68,12 @@ run() {
   say "RUN $name"
   flags_show
   local t0=$SECONDS
-  python ABIDES/abides.py -c world_agent_sim -t "$TICKER" -date "$DATE" \
+  # python -u and a plain pipe: without them Python block-buffers stdout when it
+  # is not a terminal and the run looks dead for minutes. pipefail (set above)
+  # makes the pipeline return python's exit status, not tee's.
+  PYTHONUNBUFFERED=1 python -u ABIDES/abides.py -c world_agent_sim -t "$TICKER" -date "$DATE" \
     -st "$ST" -et "$ET" -d True -m TRADES -seed "$SEED" "$@" \
-    > >(tee "$log") 2>&1 || die "$name failed -- see $log"
+    2>&1 | tee "$log" || die "$name failed -- see $log"
   printf 'elapsed %s s\n' "$(( SECONDS - t0 ))" | tee -a "$log"
 }
 
