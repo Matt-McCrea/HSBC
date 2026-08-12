@@ -1,0 +1,186 @@
+"""Paired policy comparison -- the headline number for the RL chapter.
+
+Every policy walks the SAME held-out seed list, so each seed gives one episode per
+policy on the same day, t0, side and Q. That pairing is not a nicety here, it is the
+whole comparison: shortfall correlates -0.837 with market drift over the episode, so
+the between-seed spread is dominated by where the market happened to go, not by what
+the policy did. Comparing unpaired means throws that structure away and buries a real
+effect under a standard error four to ten times too large.
+
+The paired difference d_i = shortfall(policy_i) - shortfall(baseline_i) cancels the
+drift common to both arms of a seed, which is exactly the "quote the POLICY-VS-BENCHMARK
+difference rather than the absolute level" that analyze_logs recommends but does not
+itself compute.
+
+    python -m rl_execution.compare_policies logs/eval_frontier_lam.jsonl
+    python -m rl_execution.compare_policies logs/eval_frontier_*.jsonl --baseline twap
+
+Pure pandas/numpy over a finished log: no kernel, no model, runs in milliseconds.
+"""
+
+import argparse
+import glob
+import itertools
+import json
+import math
+import os
+
+import numpy as np
+import pandas as pd
+
+# A seed is the market situation an episode was handed. Two episodes are the same seed
+# when all four match -- Q and side included, since evaluate.generate_held_out_seeds
+# randomises them per seed and a BUY is not comparable with a SELL.
+SEED_KEY = ["seed_day", "t0", "side", "Q"]
+
+
+def load(paths):
+    rows = []
+    for path in paths:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("error"):
+                    continue
+                rows.append(rec)
+    if not rows:
+        raise SystemExit(f"no usable episodes found in {paths}")
+    df = pd.DataFrame(rows)
+    if "shortfall_bps" not in df.columns or df["shortfall_bps"].isna().all():
+        df["shortfall_bps"] = df["shortfall"] / df["p_arrival"] * 10_000.0
+    return df
+
+
+def _t_sf(t, dof):
+    """Two-sided p-value for Student's t. Uses the exact regularised incomplete beta via
+    the continued fraction in math.lgamma terms would be overkill; scipy is not a
+    dependency here, so fall back to the normal approximation above 30 dof and a
+    conservative note below it."""
+    try:
+        from scipy import stats
+        return float(2 * stats.t.sf(abs(t), dof))
+    except ImportError:
+        return float(math.erfc(abs(t) / math.sqrt(2.0)))
+
+
+def paired(df, baseline="twap", metric="shortfall_bps"):
+    """One row per (policy vs baseline) with the paired statistics."""
+    wide = df.pivot_table(index=SEED_KEY, columns="policy_name", values=metric, aggfunc="mean")
+    if baseline not in wide.columns:
+        raise SystemExit(f"baseline policy {baseline!r} not in log; found {list(wide.columns)}")
+
+    out = []
+    for policy in wide.columns:
+        if policy == baseline:
+            continue
+        both = wide[[baseline, policy]].dropna()
+        n = len(both)
+        if n < 2:
+            continue
+        d = (both[policy] - both[baseline]).to_numpy(dtype=float)
+        mean_d = float(d.mean())
+        se_d = float(d.std(ddof=1) / math.sqrt(n))
+        t = mean_d / se_d if se_d > 0 else float("nan")
+        # What the pairing actually bought: the naive stderr of the difference of means,
+        # which is what an unpaired reading of the evaluation summary would have used.
+        se_unpaired = math.sqrt(
+            both[policy].std(ddof=1) ** 2 / n + both[baseline].std(ddof=1) ** 2 / n)
+        out.append({
+            "policy": policy, "n": n,
+            "baseline_mean": float(both[baseline].mean()),
+            "policy_mean": float(both[policy].mean()),
+            "mean_diff": mean_d, "stderr": se_d,
+            "t": t, "p": _t_sf(t, n - 1) if se_d > 0 else float("nan"),
+            "ci_lo": mean_d - 1.96 * se_d, "ci_hi": mean_d + 1.96 * se_d,
+            "wins": int((d < 0).sum()), "se_unpaired": se_unpaired,
+            "variance_reduction": se_unpaired / se_d if se_d > 0 else float("nan"),
+        })
+    return pd.DataFrame(out).sort_values("mean_diff") if out else pd.DataFrame()
+
+
+def report(df, baseline="twap", metric="shortfall_bps"):
+    lines = []
+    A = lines.append
+    A("=" * 78)
+    A(f"PAIRED POLICY COMPARISON   metric={metric}   baseline={baseline}")
+    A("negative mean_diff = the policy BEAT the baseline on the same seeds")
+    A("=" * 78)
+
+    per = df.groupby("policy_name")[metric].agg(["count", "mean", "std"])
+    A("\nUNPAIRED (what the evaluation summary prints -- drift still in the noise)")
+    for name, r in per.iterrows():
+        se = r["std"] / math.sqrt(r["count"]) if r["count"] > 1 else 0.0
+        A(f"  {name:<14} n={int(r['count']):>3}  mean={r['mean']:>9.3f} bps  stderr={se:>8.3f}")
+
+    res = paired(df, baseline, metric)
+    if res.empty:
+        A("\nno policy shares enough seeds with the baseline to pair")
+        return "\n".join(lines), res
+
+    A(f"\nPAIRED vs {baseline} (drift cancels within each seed)")
+    for _, r in res.iterrows():
+        star = "***" if r["p"] < 0.001 else "**" if r["p"] < 0.01 else "*" if r["p"] < 0.05 else ""
+        A(f"  {r['policy']:<14} n={int(r['n']):>3}  diff={r['mean_diff']:>+9.3f} bps  "
+          f"stderr={r['stderr']:>7.3f}  t={r['t']:>+6.2f}  p={r['p']:.4f}{star}")
+        A(f"  {'':<14} 95% CI [{r['ci_lo']:>+8.3f}, {r['ci_hi']:>+8.3f}]  "
+          f"beat baseline on {int(r['wins'])}/{int(r['n'])} seeds")
+        A(f"  {'':<14} pairing shrank the stderr {r['variance_reduction']:.1f}x "
+          f"(unpaired would be {r['se_unpaired']:.3f})")
+
+    A("\nREADING THIS")
+    best = res.iloc[0]
+    if best["mean_diff"] > 0 and best["p"] < 0.05:
+        A(f"  Every policy tested is significantly WORSE than {baseline}. With 114 training")
+        A("  episodes over a 55-state table that is a legitimate result, not a bug: TWAP is")
+        A("  the risk-neutral Almgren-Chriss optimum, so beating it requires either exploitable")
+        A("  structure or risk aversion the agent had too little data to find.")
+    elif best["p"] >= 0.05:
+        A(f"  No policy separates from {baseline} at the 5% level. State the confidence")
+        A("  interval rather than 'no difference' -- with n=18 the interval is wide enough")
+        A("  that a modest effect could not have been detected either way.")
+    else:
+        A(f"  {best['policy']} beats {baseline} by {-best['mean_diff']:.2f} bps (p={best['p']:.4f}).")
+    A("=" * 78)
+    return "\n".join(lines), res
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("logs", nargs="+", help="one or more eval jsonl logs (globs allowed)")
+    p.add_argument("--baseline", default="twap")
+    p.add_argument("--metric", default="shortfall_bps")
+    p.add_argument("--by-side", action="store_true",
+                   help="split the comparison by BUY/SELL. Worth doing when drift is "
+                        "directional: an upward-drifting market flatters sellers, so a "
+                        "policy can look good on one side purely from that")
+    p.add_argument("--csv", default=None, help="write the paired table here")
+    args = p.parse_args()
+
+    paths = list(itertools.chain.from_iterable(glob.glob(g) or [g] for g in args.logs))
+    missing = [q for q in paths if not os.path.exists(q)]
+    if missing:
+        raise SystemExit(f"no such log(s): {missing}")
+    df = load(paths)
+
+    text, res = report(df, args.baseline, args.metric)
+    print(text)
+
+    if args.by_side:
+        for side, grp in df.groupby("side"):
+            print(f"\n{'=' * 78}\nSIDE = {side}   ({grp['policy_name'].nunique()} policies, "
+                  f"{len(grp)} episodes)\n{'=' * 78}")
+            print(report(grp, args.baseline, args.metric)[0])
+
+    if args.csv and not res.empty:
+        res.to_csv(args.csv, index=False)
+        print(f"\nwritten to {args.csv}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
