@@ -155,6 +155,14 @@ month() {
 # matters. Still callable as `./sweep_final.sh month-corr` if the baseline
 # month is wanted too.
 phase_month_corr()    { month corr    -type DDPM -nsteps 100 -eta 0.0 --ckpt-path "$CK_BASE" $CORR; }
+# NOT in `all` (dropped 2026-08-13): the genuinely no-fixes checkpoint trained
+# and run separately (nofix_baseline.sh) is a strictly better published-
+# configuration baseline than this. month-vanilla holds our fixed pipeline
+# constant and only removes decode corrections, which is a narrower question
+# (what do the corrections buy on our own model) that DDPM-100 -- already
+# stochastic by construction -- is unlikely to answer with much signal, since
+# the corrections exist to compensate for DETERMINISTIC low-step sampling
+# specifically. Still callable standalone if the narrower ablation is wanted.
 phase_month_vanilla() { month vanilla -type DDPM -nsteps 100 -eta 0.0 --ckpt-path "$CK_BASE"; }
 # Step-count ablation on the model actually shipped, rather than on the
 # pre-retrain baseline it is currently established on.
@@ -251,7 +259,7 @@ case "${1:-all}" in
   longhorizon)    phase_longhorizon ;;
   predictive)     phase_predictive ;;
   all)            phase_fills; phase_month_final; phase_predictive; \
-                  phase_longhorizon; phase_month_vanilla ;;
+                  phase_longhorizon ;;
   summary)        summary; exit 0 ;;
   *) sed -n '3,30p' "$0"; exit 1 ;;
 esac
