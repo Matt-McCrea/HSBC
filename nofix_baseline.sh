@@ -20,7 +20,18 @@
 #   UNCLAMP_DEPTH=0   depth targets clamped at 0 again
 #   PRICE_REANCHOR=0  absolute price z-scoring, not deviation from the day open
 #   DEPTH_INDEX_FIX=0 the self-referential index=j for event_type==1
-# All three are env vars, so nothing here moves flag FILES around.
+#
+# constants.py reads UNCLAMP_DEPTH and PRICE_REANCHOR as
+#   (env == "1") OR os.path.exists(<FLAG file>)
+# which is an OR, not an override: a leftover flag file wins regardless of the
+# env var. sweep_final.sh and battery_0724.sh both leave these files PRESENT
+# when they finish (0.724 needs them on). So this script explicitly moves them
+# out of the way too, not just sets env vars -- discovered 2026-08-13 when the
+# rebuilt depth stats matched the original exactly (expected: depth is a
+# same-day price DIFFERENCE, so a constant anchor cancels out of it and depth
+# alone can never prove PRICE_REANCHOR is off) but price stats still showed the
+# reanchored shape (mean ~0, not the ~3620 the code's own comment documents for
+# the absolute convention).
 #
 # WHY THIS IS WORTH A TRAINING RUN: with the clamp and the index bug, 0.00% of
 # real depth targets are negative, so the model cannot learn marketable orders
@@ -33,6 +44,31 @@
 set -u
 
 NOFIX_ENV=(UNCLAMP_DEPTH=0 PRICE_REANCHOR=0 DEPTH_INDEX_FIX=0)
+FILE_FLAGS=(UNCLAMP_DEPTH_FLAG PRICE_REANCHOR_FLAG)
+STASH=.flagstash
+
+# Move any of FILE_FLAGS out of the way. Must run before prep/train/sims --
+# their presence overrides the env vars above regardless of value.
+nofix_flags_off() {
+  mkdir -p "$STASH"
+  for f in "${FILE_FLAGS[@]}"; do
+    [ -e "$f" ] && mv "$f" "$STASH/" && note "  stashed $f (was overriding the env var)"
+  done
+  for f in "${FILE_FLAGS[@]}"; do
+    [ -e "$f" ] && { note "FATAL: $f still present, cannot proceed"; return 1; }
+  done
+  note "  confirmed absent: ${FILE_FLAGS[*]}"
+  return 0
+}
+
+# Restore for anything downstream that expects them (e.g. sweep_final.sh, or
+# just leaving the repo in its normal state).
+nofix_flags_on() {
+  for f in "${FILE_FLAGS[@]}"; do
+    [ -e "$STASH/$f" ] && mv "$STASH/$f" . && note "  restored $f"
+    [ -e "$f" ] || { touch "$f"; note "  created $f"; }
+  done
+}
 TRAIN_SECONDS="${TRAIN_SECONDS:-18000}"        # 5 h
 SIM_TIMEOUT="${SIM_TIMEOUT:-7200}"
 SIM_TIMEOUT_DDPM="${SIM_TIMEOUT_DDPM:-10800}"
@@ -80,11 +116,13 @@ stage_restore() {
   if [ -f "$BACKUP" ]; then cp "$BACKUP" "$CFG"; note "restored $CFG from $BACKUP"
   else note "no backup at $BACKUP -- nothing restored"; fi
   grep -nE "LEARNING_RATE\]|CONDITIONAL_DROPOUT\]" "$CFG" | tee -a "$PROG"
+  nofix_flags_on
 }
 
 # --------------------------------------------------------------- stage prep -
 stage_prep() {
   note "=== prep (rebuilding with all three fixes OFF) ==="
+  nofix_flags_off || return 1
   note "contents of data/INTC before:"
   ls -la data/INTC 2>/dev/null | tee -a "$PROG"
   [ -f "$STATS" ] && { cp "$STATS" "$OUT/normalization_stats.before.json"; note "saved old stats"; }
@@ -124,6 +162,7 @@ PY
 # -------------------------------------------------------------- stage train -
 stage_train() {
   note "=== train (cap ${TRAIN_SECONDS}s, one checkpoint per epoch) ==="
+  nofix_flags_off || return 1
   ls -1 "$CKDIR"/TRADES/*.ckpt 2>/dev/null | wc -l | xargs -I{} note "checkpoints before: {}"
   timeout "$TRAIN_SECONDS" env "${NOFIX_ENV[@]}" KEEP_EPOCH_CHECKPOINTS=1 \
       python -u main.py 2>&1 | tee "$OUT/train.log"
@@ -169,6 +208,7 @@ sim() {
 
 stage_sims() {
   note "=== sims ==="
+  nofix_flags_off || return 1
   local CK; CK=$(cat "$OUT/CHECKPOINT.txt" 2>/dev/null || newest_ckpt)
   if [ -z "$CK" ]; then note "no checkpoint -- run pick first"; return 1; fi
   note "using $CK"
