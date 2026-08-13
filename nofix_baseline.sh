@@ -44,7 +44,19 @@
 set -u
 
 NOFIX_ENV=(UNCLAMP_DEPTH=0 PRICE_REANCHOR=0 DEPTH_INDEX_FIX=0)
-FILE_FLAGS=(UNCLAMP_DEPTH_FLAG PRICE_REANCHOR_FLAG)
+# RESUME_TRAINING_FLAG and SCHEDULED_SAMPLING_FLAG are unrelated to the
+# no-fixes DATA pipeline but corrupt a from-scratch baseline just as badly:
+# RESUME_TRAINING_FLAG (run.py, file-only, no env escape) makes training
+# resume from whatever .ckpt sits in data/checkpoints/TRADES -- someone
+# else's converged, fixes-trained weights -- instead of starting fresh.
+# SCHEDULED_SAMPLING_FLAG turns on conditioning-on-own-output during
+# training, which is not part of a baseline reproduction. Both must be
+# ABSENT for `train`, caught 2026-08-13 after a resumed, scheduled-sampling
+# run on no-fixes data produced the same instability as the original paper
+# reproduction attempts (loss jumping 1.0 -> 2.9 around step 11k and
+# staying there -- a converged model's input distribution pulled out from
+# under it, compounded by partly conditioning on its own output).
+FILE_FLAGS=(UNCLAMP_DEPTH_FLAG PRICE_REANCHOR_FLAG RESUME_TRAINING_FLAG SCHEDULED_SAMPLING_FLAG)
 STASH=.flagstash
 
 # Move any of FILE_FLAGS out of the way. Must run before prep/train/sims --
