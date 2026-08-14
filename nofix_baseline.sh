@@ -91,7 +91,19 @@ STATS=data/INTC/normalization_stats.json
 OUT="nofix_$(date +%Y%m%d_%H%M)"
 mkdir -p "$OUT"
 PROG="$OUT/PROGRESS.txt"
-BACKUP="$OUT/configuration.py.orig"
+
+# FIXED locations, not $OUT-relative. config/prep/train/pick/sims/restore are
+# routinely invoked as SEPARATE script runs, each getting a fresh $OUT -- a
+# backup written under one $OUT is invisible to `restore` running in another,
+# which silently no-ops the restore. Discovered 2026-08-14 when
+# normalization_stats.json stayed on the no-fixes values (mean_price ~3620)
+# through a `restore` and into the next sweep_final.sh run, producing
+# cond_z[price] ~ -53 (= reanchored-near-zero price z-scored against the
+# absolute-price stats: -3620/67 matches the observed mean almost exactly).
+PERSIST_DIR=.nofix_backups
+mkdir -p "$PERSIST_DIR"
+BACKUP="$PERSIST_DIR/configuration.py.orig"
+STATS_BACKUP="$PERSIST_DIR/normalization_stats.orig.json"
 
 DAYS=(20150102 20150105 20150106 20150107 20150108 20150109 20150112 20150113 \
       20150114 20150115 20150116 20150120 20150121 20150122 20150123 20150126 \
@@ -104,7 +116,13 @@ note() { echo "$(date '+%m-%d %H:%M:%S')  $*" | tee -a "$PROG"; }
 stage_config() {
   note "=== config ==="
   [ -f "$CFG" ] || { note "FATAL: no $CFG -- run from the repo root"; return 1; }
-  cp "$CFG" "$BACKUP"; note "backed up $CFG -> $BACKUP"
+  # Only back up once. Re-running `config` after it already ran would back up
+  # the ALREADY pre-fix file as though it were the true original.
+  if [ -f "$BACKUP" ]; then
+    note "backup already exists at $BACKUP, not overwriting"
+  else
+    cp "$CFG" "$BACKUP"; note "backed up $CFG -> $BACKUP"
+  fi
 
   python3 - "$CFG" <<'PY'
 import re, sys
@@ -126,8 +144,25 @@ PY
 stage_restore() {
   note "=== restore ==="
   if [ -f "$BACKUP" ]; then cp "$BACKUP" "$CFG"; note "restored $CFG from $BACKUP"
-  else note "no backup at $BACKUP -- nothing restored"; fi
+  else note "no backup at $BACKUP -- nothing restored (config stage may never have run)"; fi
   grep -nE "LEARNING_RATE\]|CONDITIONAL_DROPOUT\]" "$CFG" | tee -a "$PROG"
+
+  if [ -f "$STATS_BACKUP" ]; then
+    cp "$STATS_BACKUP" "$STATS"
+    note "restored $STATS from $STATS_BACKUP"
+    python3 - "$STATS" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+print("  restored event.mean_price =", d.get("event", {}).get("mean_price"))
+print("  (must NOT be ~3620 -- that is the no-fixes absolute-price value)")
+PY
+  else
+    note "WARNING: no stats backup at $STATS_BACKUP -- $STATS was NOT restored."
+    note "         If prep ever ran, data/INTC/normalization_stats.json may still"
+    note "         hold the no-fixes values. Verify before trusting any"
+    note "         with-fixes-checkpoint simulation run after this point."
+  fi
+
   nofix_flags_on
 }
 
@@ -137,7 +172,16 @@ stage_prep() {
   nofix_flags_off || return 1
   note "contents of data/INTC before:"
   ls -la data/INTC 2>/dev/null | tee -a "$PROG"
-  [ -f "$STATS" ] && { cp "$STATS" "$OUT/normalization_stats.before.json"; note "saved old stats"; }
+  # Only back up once, to the FIXED location restore() reads from -- not $OUT,
+  # which is per-invocation and invisible to a later `restore` call. And only
+  # if a backup doesn't already exist, so a second `prep` invocation can't
+  # clobber the true original with the no-fixes version it's about to write.
+  if [ -f "$STATS" ] && [ ! -f "$STATS_BACKUP" ]; then
+    cp "$STATS" "$STATS_BACKUP"; note "saved original stats -> $STATS_BACKUP"
+  elif [ -f "$STATS_BACKUP" ]; then
+    note "original stats already backed up at $STATS_BACKUP, not overwriting"
+  fi
+  [ -f "$STATS" ] && { cp "$STATS" "$OUT/normalization_stats.before.json"; note "saved old stats (this invocation)"; }
 
   note "launching build -- if the dataset is cached this will be quick and the"
   note "stats will NOT change, which is how you will know a rebuild is needed."
