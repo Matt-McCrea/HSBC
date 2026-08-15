@@ -199,6 +199,25 @@ phase_predictive() {
     return 0
   fi
 
+  # !! These four are NOT a TRADES-configuration comparison. postfix_ddim1 and
+  # postfix_ddpm100 both run on OUR post-fix checkpoints (val_ema=0.69_/0.724 --
+  # unclamped depth, corrected index, price reanchoring), just at different step
+  # counts. They restate the step-count ablation already covered elsewhere in the
+  # chapter, and say nothing about how our reproduction relates to TRADES's own
+  # reported 0.307->0.486 degradation, which is what the methodology text
+  # actually promises to compute.
+  #
+  # For THAT comparison, score the no-fixes checkpoint (nofix_baseline.sh; as of
+  # 2026-08-15, val_ema=0.667_epoch=2) at DDIM-1 and DDPM-100 instead -- it plays
+  # the same role for the predictive score that ckpt 0.681 played for the
+  # LOB-Bench replication (now lost). Do this as a SEPARATE predictive_batch
+  # call, not by adding it here: nofix runs use a different checkpoint variable
+  # ($CK, from nofix_*/CHECKPOINT.txt, not $CK_BASE/$CK_FINAL) and typically a
+  # different day/window (2015-01-30 09:30-10:00, from nofix_baseline.sh's fixed
+  # DATE/ST/ET), so it needs its own --real reference rather than sharing $REAL
+  # above. See the chat log 2026-08-15 for the exact commands, or ask for them
+  # to be re-derived.
+
   # Resolve generated files by glob so exact suffixes do not have to be guessed.
   local args=()
   add() {  # add <label> <glob>
@@ -209,10 +228,20 @@ phase_predictive() {
       note "  predictive: $1 NOT FOUND ($2)"
     fi
   }
-  add inherited_ddim1        "$L/world_agent_INTC_2015-01-29_10-00-00_30_DDIM_0.0_1_*"
-  add inherited_ddpm100      "$L/world_agent_INTC_2015-01-29_10-00-00_30_DDPM_0.0_100_*"
+  add postfix_ddim1          "$L/world_agent_INTC_2015-01-29_10-00-00_30_DDIM_0.0_1_*"
+  add postfix_ddpm100        "$L/world_agent_INTC_2015-01-29_10-00-00_30_DDPM_0.0_100_*"
   add ours_0724_fixed        "$L/world_agent_INTC_2015-01-29_10-00-00_30_DDIM_0.0_10_val_ema=0.724*tdprior_sr_dn0.3"
-  add ours_ss_e4_fixed       "$L/world_agent_INTC_2015-01-29_10-00-00_30_DDIM_0.0_10_val_ema=0.69*tdprior_sr_dn0.3"
+  # !! val_ema=0.69_* (not 0.69*): "0.69*" also matches "val_ema=0.697...",
+  # which is epoch 3 per tab:ss_permetric in the draft (epoch2=0.701,
+  # epoch3=0.697, epoch4=0.69), and "0.697" sorts alphabetically BEFORE
+  # "0.69_" -- `ls | head -1` silently picked epoch 3 under a label claiming
+  # to be the final model (epoch 4). Confirmed 2026-08-15. Even with the
+  # trailing underscore, the checkpoint-truncation trap documented elsewhere
+  # in this project means val_ema=0.69_epoch=2 and val_ema=0.69_epoch=4 can
+  # ALSO share this same truncated form -- verify the matched path's actual
+  # epoch (e.g. via scripts/paper_figure_runs.sh's HEADLINE var, or file
+  # mtime/provenance) before trusting this glob rather than assuming it.
+  add ours_ss_e4_fixed       "$L/world_agent_INTC_2015-01-29_10-00-00_30_DDIM_0.0_10_val_ema=0.69_*tdprior_sr_dn0.3"
 
   if [ ${#args[@]} -eq 0 ]; then note "SKIP predictive: no generated files matched"; return 0; fi
 
