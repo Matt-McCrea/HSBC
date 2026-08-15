@@ -121,6 +121,47 @@ def impact_curve(records, n_buckets=6):
     return rows
 
 
+def impact_by_style(records):
+    """Slippage split by execution style: passive limit, crossing limit, market order.
+
+    This split is not optional book-keeping, it is what makes the other impact numbers
+    readable. The action space couples size with aggression -- passive actions take half
+    a TWAP slice, market actions take up to double -- so a curve drawn against size alone
+    is mostly measuring aggression. Pooling the two populations is also what drives the
+    temporary-impact intercept negative: passive fills rest at the touch and EARN the
+    spread, so the pooled regression is averaging a cost against a rebate.
+    """
+    from rl_execution.execution_agent import ACTION_LEVELS
+    groups = {"passive limit": [], "crossing limit": [], "market order": []}
+    sizes = {k: [] for k in groups}
+    for rec in records:
+        side = str(rec.get("side", "SELL"))
+        for step in rec.get("trajectory") or []:
+            fills, mid, a = step.get("fills") or [], step.get("mid"), step.get("a")
+            if not fills or not mid or a is None:
+                continue
+            qty = sum(q for q, _ in fills)
+            if qty <= 0:
+                continue
+            lv = ACTION_LEVELS[int(a)]
+            key = ("market order" if lv["order_type"] == "market"
+                   else "crossing limit" if lv["price_cross"] else "passive limit")
+            vwap = sum(q * p for q, p in fills) / qty
+            raw = (float(mid) - vwap) if side == "SELL" else (vwap - float(mid))
+            groups[key].append(raw / float(mid) * 10_000.0)
+            sizes[key].append(float(qty))
+
+    out = []
+    for key, vals in groups.items():
+        if len(vals) < 2:
+            continue
+        v = np.asarray(vals)
+        out.append({"style": key, "n": len(v), "mean_size": float(np.mean(sizes[key])),
+                    "mean_slip_bps": float(v.mean()),
+                    "stderr": float(v.std(ddof=1) / math.sqrt(len(v)))})
+    return out
+
+
 def permanent_impact(records, horizons=(1, 2, 3, 5)):
     """Regress the mid change over h decision points on our signed volume.
 
@@ -186,6 +227,7 @@ def analyse(records):
         "permanent": permanent_impact(records),
         "sqrt_law": participation_impact(records),
         "curve": impact_curve(records),
+        "by_style": impact_by_style(records),
         "n_episodes": len([r for r in records if r.get("trajectory")]),
     }
 
@@ -228,6 +270,18 @@ def format_report(a):
         else:
             L.append("  retention not reported: permanent impact is not distinguishable from zero "
                      "at both\n  horizons, so their ratio would describe noise rather than decay.")
+
+    style = a.get("by_style") or []
+    if style:
+        L.append("")
+        L.append("SLIPPAGE BY EXECUTION STYLE   the split the pooled eta hides")
+        L.append(f"  {'style':<16} {'n':>5} {'mean size':>10} {'slippage':>12} {'stderr':>8}")
+        for r in style:
+            L.append(f"  {r['style']:<16} {r['n']:>5} {r['mean_size']:>10.0f} "
+                     f"{r['mean_slip_bps']:>+9.3f}bps {r['stderr']:>8.3f}")
+        L.append("  Passive fills EARN the spread; aggressive fills pay it. Pooling the two is")
+        L.append("  what drives the temporary-impact intercept negative, and it makes a curve")
+        L.append("  drawn against size alone mostly a measure of aggression, not of size.")
 
     curve = a.get("curve") or []
     if curve:

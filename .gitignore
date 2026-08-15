@@ -65,3 +65,5 @@ analysis/dissertation_source_map.md
 analysis/call_prep_qa.md
 analysis/hsbc_update_brief.tex
 analysis/methodology_draft.tex
+logs/
+checkpoints_dl/
