@@ -279,6 +279,15 @@ stage_sims() {
   sim control_ddpm100 20150130 09:30:00 10:00:00 \
       -type DDPM -nsteps 100 -eta 0.0 --ckpt-path "$CK"
 
+  # 2b. Single-step, same checkpoint/day/window as control_ddpm100. This pair
+  #     is the TRADES-configuration predictive-score comparison sweep_final.sh
+  #     phase_predictive scores separately (added 2026-08-15) -- it needs both
+  #     halves on the SAME checkpoint to answer "does our reproduction show
+  #     TRADES's own reported 100-step/1-step degradation", which the postfix
+  #     pair there does not (it is on our post-fix checkpoints).
+  sim control_ddim1 20150130 09:30:00 10:00:00 \
+      -type DDIM -nsteps 1 -eta 0.0 --ckpt-path "$CK"
+
   # 3. eta=1, for the remedy (i) comparison in 5.3.2.
   sim eta1 20150130 09:30:00 10:00:00 \
       -type DDIM -nsteps 10 -eta 1.0 --ckpt-path "$CK"
