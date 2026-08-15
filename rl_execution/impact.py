@@ -68,6 +68,59 @@ def temporary_impact(records):
     return _fit(np.asarray(rates), np.asarray(slips))
 
 
+def impact_curve(records, n_buckets=6):
+    """Mean slippage per order-size bucket -- the empirical impact curve.
+
+    A single regression slope reports impact assuming a functional form. Since linear
+    and square-root fits are statistically indistinguishable on this data, the shape is
+    better shown than assumed: bucketing by size and reporting mean slippage per bucket
+    lets the curve speak, and the per-share column makes concavity directly visible
+    (flat per-share = linear impact, falling per-share = concave/square-root-like).
+
+    Slippage is normalised to basis points of the prevailing mid so buckets remain
+    comparable across days and price levels.
+    """
+    qtys, slips_bps = [], []
+    for rec in records:
+        side = str(rec.get("side", "SELL"))
+        for step in rec.get("trajectory") or []:
+            fills, mid = step.get("fills") or [], step.get("mid")
+            if not fills or not mid:
+                continue
+            qty = sum(q for q, _ in fills)
+            if qty <= 0:
+                continue
+            vwap = sum(q * p for q, p in fills) / qty
+            raw = (float(mid) - vwap) if side == "SELL" else (vwap - float(mid))
+            qtys.append(float(qty))
+            slips_bps.append(raw / float(mid) * 10_000.0)
+
+    q = np.asarray(qtys)
+    s = np.asarray(slips_bps)
+    if q.size < n_buckets * 2:
+        return []
+
+    # Quantile edges, deduplicated: child order sizes are heavily repeated (they are
+    # multiples of a fixed slice), so several quantiles can land on the same value and
+    # would otherwise produce empty buckets.
+    edges = np.unique(np.quantile(q, np.linspace(0.0, 1.0, n_buckets + 1)))
+    rows = []
+    for lo, hi, last in ((edges[i], edges[i + 1], i == len(edges) - 2)
+                          for i in range(len(edges) - 1)):
+        m = (q >= lo) & ((q <= hi) if last else (q < hi))
+        if m.sum() < 2:
+            continue
+        sl = s[m]
+        rows.append({
+            "lo": lo, "hi": hi, "n": int(m.sum()),
+            "mean_qty": float(q[m].mean()),
+            "mean_slip_bps": float(sl.mean()),
+            "stderr": float(sl.std(ddof=1) / math.sqrt(m.sum())),
+            "bps_per_100sh": float(sl.mean() / q[m].mean() * 100.0),
+        })
+    return rows
+
+
 def permanent_impact(records, horizons=(1, 2, 3, 5)):
     """Regress the mid change over h decision points on our signed volume.
 
@@ -132,6 +185,7 @@ def analyse(records):
         "temporary": temporary_impact(records),
         "permanent": permanent_impact(records),
         "sqrt_law": participation_impact(records),
+        "curve": impact_curve(records),
         "n_episodes": len([r for r in records if r.get("trajectory")]),
     }
 
@@ -174,6 +228,19 @@ def format_report(a):
         else:
             L.append("  retention not reported: permanent impact is not distinguishable from zero "
                      "at both\n  horizons, so their ratio would describe noise rather than decay.")
+
+    curve = a.get("curve") or []
+    if curve:
+        L.append("")
+        L.append("IMPACT CURVE BY ORDER SIZE   mean slippage vs the mid, per size bucket")
+        L.append(f"  {'size range':>16} {'n':>6} {'mean size':>10} {'slippage':>12} "
+                 f"{'stderr':>8} {'per 100sh':>10}")
+        for r in curve:
+            L.append(f"  {r['lo']:>7.0f}-{r['hi']:<8.0f} {r['n']:>6} {r['mean_qty']:>10.0f} "
+                     f"{r['mean_slip_bps']:>9.3f}bps {r['stderr']:>8.3f} "
+                     f"{r['bps_per_100sh']:>10.4f}")
+        L.append("  Flat 'per 100sh' = impact linear in size; falling = concave (square-root-like).")
+        L.append("  This is the measured shape; the fits below only test two assumed forms against it.")
 
     s = a["sqrt_law"]
     L.append("")
