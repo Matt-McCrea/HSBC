@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TRADES — A Plain(ish)-Language Explainer</title>
+<script>
+  MathJax = {
+    tex: { inlineMath: [['$','$'],['\\(','\\)']], displayMath: [['$$','$$'],['\\[','\\]']] },
+    svg: { fontCache: 'global' }
+  };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+<style>
+  :root {
+    --ink: #1a1c1f; --muted: #5b6570; --bg: #fbfaf8; --card: #ffffff;
+    --accent: #2a6db0; --line: #e5e2dc; --code-bg: #f2efe9; --warn: #b45309;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #e7e5e1; --muted: #9aa3ad; --bg: #16181b; --card: #1e2125;
+      --accent: #6fb2f0; --line: #2c3036; --code-bg: #23272c; --warn: #f0b352;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 17px/1.65 Georgia, 'Iowan Old Style', 'Palatino Linotype', serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 40px 24px 96px; }
+  h1 { font-size: 2.05rem; line-height: 1.15; margin: 0 0 .2em; letter-spacing: -.01em; }
+  .sub { color: var(--muted); font-style: italic; margin: 0 0 2em; font-size: 1.05rem; }
+  h2 {
+    font-size: 1.5rem; margin: 2.4em 0 .5em; padding-top: .6em;
+    border-top: 1px solid var(--line); letter-spacing: -.01em;
+  }
+  h3 { font-size: 1.16rem; margin: 1.7em 0 .3em; color: var(--ink); }
+  p, li { color: var(--ink); }
+  strong { font-weight: 700; }
+  em { font-style: italic; }
+  a { color: var(--accent); }
+  code, .mono {
+    font-family: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: .87em; background: var(--code-bg); padding: .08em .35em; border-radius: 4px;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px 16px; overflow-x: auto; font-size: .82rem; line-height: 1.5;
+    font-family: 'SF Mono','JetBrains Mono', Menlo, Consolas, monospace;
+  }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1.2em 0; font-size: .93rem; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-family: system-ui, sans-serif; font-size: .8rem;
+       text-transform: uppercase; letter-spacing: .04em; }
+  .callout {
+    background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--accent);
+    border-radius: 8px; padding: 4px 20px; margin: 1.4em 0;
+  }
+  .tldr { border-left-color: var(--warn); }
+  .lead { font-size: 1.05rem; }
+  mjx-container { overflow-x: auto; overflow-y: hidden; max-width: 100%; }
+  ol, ul { padding-left: 1.4em; }
+  li { margin: .3em 0; }
+  .diagram { font-family: 'SF Mono', Menlo, monospace; font-size: .8rem; white-space: pre;
+             color: var(--muted); }
+  hr { border: none; border-top: 1px solid var(--line); margin: 2.5em 0; }
+  .glossary dt { font-weight: 700; margin-top: .7em; }
+  .glossary dd { margin: 0 0 0 0; color: var(--muted); }
+  .scroll { overflow-x: auto; margin: 1.2em 0; }
+  table.log { font-size: .82rem; min-width: 640px; }
+  table.log td { vertical-align: top; }
+  table.log tr.cat td { padding-top: 16px; }
+  .catlbl { font-family: system-ui, sans-serif; font-size: .72rem; text-transform: uppercase;
+            letter-spacing: .05em; color: var(--muted); font-weight: 700; }
+  .badge { display: inline-block; font-family: system-ui, sans-serif; font-size: .68rem;
+           font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+           padding: 2px 7px; border-radius: 999px; white-space: nowrap; }
+  .b-ref  { background: #8882; color: var(--muted); }
+  .b-part { background: #eab30833; color: var(--warn); }
+  .b-conf { background: #16a34a2a; color: #16a34a; }
+  .b-fix  { background: #8882; color: var(--muted); }
+  .b-next { background: #2a6db02a; color: var(--accent); }
+  @media (prefers-color-scheme: dark) { .b-conf { color: #4ade80; } }
+  @media print { body { background: #fff; } .wrap { max-width: none; } h2 { break-after: avoid; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>TRADES: A Plain(ish)-Language Explainer</h1>
+<p class="sub">What this project is, the maths behind it, and what we are trying to do.</p>
+
+<p>Written to be read end-to-end, but it is fine to stop after Part&nbsp;1 for the gist; the later parts
+add technical detail. Equations use standard maths notation and should render as proper symbols in a
+browser — but each one is also explained in words right beside it.</p>
+
+<div class="callout tldr">
+<h3>Part 0 — The one-paragraph version</h3>
+<p class="lead">Finance wants a <em>realistic simulator of a stock market</em> — a sandbox to test
+trading strategies or study how prices move without risking real money. <strong>TRADES</strong> is a
+recent (2025) approach that builds one using the same family of AI models behind image generators like
+Stable Diffusion, called <strong>diffusion models</strong>. Instead of pixels it generates a stream of
+market <em>orders</em> (buy this, cancel that) one at a time and lets them play out in a simulated
+market. The catch: it is slow — each order takes ~100 internal steps. My project is about making it
+<strong>faster</strong>. When I swap in the standard fast shortcuts, the simulated market
+<strong>freezes</strong> (the price stops moving). The work has been figuring out <em>why</em> that
+happens, and testing fixes.</p>
+</div>
+
+<h2>Part 1 — The thing being simulated: a limit order book</h2>
+
+<h3>1.1 How a market matches buyers and sellers</h3>
+<p>When you buy or sell a share you are matched against specific orders other people placed. Those
+resting orders live in a structure called the <strong>Limit Order Book (LOB)</strong>, with two sides:</p>
+<ul>
+  <li><strong>Bids</strong> — people willing to <em>buy</em>, each at a price and quantity. The highest
+  bid is the <em>best bid</em>.</li>
+  <li><strong>Asks</strong> — people willing to <em>sell</em>. The lowest is the <em>best ask</em>.</li>
+</ul>
+<pre class="diagram">        SIZE    PRICE
+ASKS     300  $33.97   ← best ask (cheapest offer to sell)
+         500  $33.98
+         200  $33.99
+        ------------------  ← the "spread" gap
+BIDS     400  $33.95   ← best bid (highest offer to buy)
+         600  $33.94
+         100  $33.93</pre>
+<ul>
+  <li><strong>Mid-price</strong> — the fair "current price," halfway between best bid and ask:
+  $$ m = \frac{a_1 + b_1}{2} = \frac{33.97 + 33.95}{2} = 33.96 $$</li>
+  <li><strong>Spread</strong> — the gap; a measure of liquidity: $\; s = a_1 - b_1 = 0.02$.</li>
+</ul>
+
+<h3>1.2 The three things you can do</h3>
+<p>Every market event is one of three order <strong>types</strong>:</p>
+<ol>
+  <li><strong>Limit order</strong> — "buy 400, but only at \$33.95 or better." It <em>rests</em> in the
+  book, adding liquidity.</li>
+  <li><strong>Market order</strong> — "buy 400 right now at the best price." It executes immediately,
+  <em>crosses the spread</em>, and is what actually <strong>moves the price</strong> (it eats the best
+  ask, so the next-best becomes the new best).</li>
+  <li><strong>Cancellation</strong> — remove a resting order.</li>
+</ol>
+<p><strong>Depth</strong> measures how far inside/outside the book an order sits, in price ticks (a tick
+= \$0.01 = 100 integer units). For a buy:
+$$ \text{depth} = \frac{(\text{best bid}) - (\text{order price})}{\text{tick}} $$
+A resting buy limit <em>below</em> the best bid has <strong>positive</strong> depth (deeper in the book);
+an <strong>aggressive/marketable</strong> buy that crosses to hit the asks has <strong>negative</strong>
+depth. <em>Negative depth is the mathematical signature of a price-moving order.</em> Hold onto this — it
+matters later.</p>
+
+<h3>1.3 Why simulate this?</h3>
+<p>A realistic simulator lets a bank ask "what if?" safely. The established academic tool is
+<strong>ABIDES</strong>, an <em>agent-based</em> simulator where you script trader-bots by hand:
+laborious, and only as realistic as your rules. TRADES' new idea is to <strong>replace the hand-written
+traders with one AI model that learned realistic behaviour from real market data.</strong></p>
+
+<h2>Part 2 — The engine: diffusion models</h2>
+
+<h3>2.1 The core idea</h3>
+<p>A diffusion model learns to create data by learning to <strong>remove noise</strong>. Two directions:</p>
+<p><strong>Forward process</strong> (fixed, not learned): take a real data point $x_0$ and add Gaussian
+noise over $T$ steps until it is pure static. At any step $t$ there is a closed form — you can jump
+straight to the noised version:
+$$ x_t = \sqrt{\bar\alpha_t}\, x_0 + \sqrt{1-\bar\alpha_t}\,\varepsilon, \qquad \varepsilon \sim \mathcal{N}(0, I) $$
+$\bar\alpha_t$ slides from ~1 (barely noisy) to ~0 (all noise). TRADES uses $T=100$ steps and a
+<strong>cosine schedule</strong> $\;\bar\alpha(t) = \cos^2\!\big(\tfrac{t/T + s}{1+s}\cdot\tfrac{\pi}{2}\big),\ s=0.008$.</p>
+<p><strong>Reverse process</strong> (learned): train a network $\varepsilon_\theta$ to look at a noisy
+$x_t$ and predict the noise that was added. If you can predict the noise you can subtract a bit and step
+back toward $x_{t-1}$, repeating until you recover clean data. The objective is just "predict the noise":
+$$ \mathcal{L}_{\text{simple}} = \mathbb{E}_{x_0, t, \varepsilon}\Big[\, \big\| \varepsilon - \varepsilon_\theta(x_t, t, c) \big\|^2 \,\Big] $$
+where $c$ is the <strong>conditioning</strong> — the context the model may look at (Part 3).</p>
+
+<h3>2.2 The denoising equations in full</h3>
+<p>The maths that makes this exact. By Bayes' rule the <em>true</em> reverse step, if you knew the clean
+$x_0$, is itself a Gaussian $\;q(x_{t-1}\mid x_t, x_0) = \mathcal{N}\big(x_{t-1};\ \tilde\mu_t,\ \tilde\beta_t I\big)\;$
+with a mean that blends the clean and noisy points,
+$$ \tilde\mu_t(x_t,x_0) = \frac{\sqrt{\bar\alpha_{t-1}}\,\beta_t}{1-\bar\alpha_t}\,x_0 \;+\; \frac{\sqrt{\alpha_t}\,(1-\bar\alpha_{t-1})}{1-\bar\alpha_t}\,x_t, \qquad \tilde\beta_t = \frac{1-\bar\alpha_{t-1}}{1-\bar\alpha_t}\,\beta_t. $$
+We do not know $x_0$ when sampling, so we <strong>estimate it from the predicted noise</strong>
+(rearranging the forward equation) — the model's running guess of the clean order:
+$$ \hat{x}_0 = \frac{x_t - \sqrt{1-\bar\alpha_t}\;\varepsilon_\theta(x_t,t,c)}{\sqrt{\bar\alpha_t}}. $$
+Substituting gives the <strong>DDPM sampling step</strong> actually run:
+$$ x_{t-1} = \frac{1}{\sqrt{\alpha_t}}\!\left(x_t - \frac{1-\alpha_t}{\sqrt{1-\bar\alpha_t}}\,\varepsilon_\theta\right) + \sigma_t\, z, \qquad z\sim\mathcal{N}(0,I). $$
+That final $\sigma_t z$ is fresh injected randomness at every step. <strong>How much</strong> to inject is
+the crux. TRADES uses the <em>improved</em> DDPM (IDDPM) trick of letting the network also
+<strong>predict the variance</strong> via a learned per-coordinate knob $v_\theta$:
+$$ \Sigma_\theta(x_t,t) = \exp\!\big(v_\theta \log\beta_t + (1-v_\theta)\log\tilde\beta_t\big). $$
+So the network has <strong>two heads</strong>: a noise head $\varepsilon_\theta$ and a variance head
+$v_\theta$.</p>
+
+<h3>2.3 What the network predicts is a choice</h3>
+<p>Three mathematically-equivalent targets differ only in numerical stability:
+<strong>$\varepsilon$-prediction</strong> (TRADES' choice — output the noise, recover $\hat x_0$ above),
+<strong>$x_0$-prediction</strong> (output the clean point), and <strong>$v$-prediction</strong> (a blend
+that behaves well across all noise levels). The fast solvers in §2.5 lean on the $\hat{x}_0$ view because
+it is more stable at very few steps.</p>
+
+<h3>2.4 Why learning to denoise learns the whole distribution</h3>
+<p>This is the conceptual heart, and not obvious: why should a pile of "guess the noise" regressions
+reconstruct a complex probability distribution?</p>
+<p>The link is <strong>score matching</strong>. Define the <em>score</em> of the noised data as the
+gradient of its log-density, $\nabla_{x}\log q_t(x)$ — a field that at every point says which way to move
+toward higher probability. The optimal noise-predictor <em>is</em> that score, up to a known scale:
+$$ \varepsilon_\theta(x_t,t) \;\approx\; -\sqrt{1-\bar\alpha_t}\;\nabla_{x}\log q_t(x_t). $$
+Equivalently, <strong>Tweedie's formula</strong> says the best denoiser is a distribution-aware quantity
+— the posterior mean of the clean data given the noisy observation:
+$$ \mathbb{E}[x_0\mid x_t] = \frac{1}{\sqrt{\bar\alpha_t}}\Big(x_t + (1-\bar\alpha_t)\,\nabla_x\log q_t(x_t)\Big). $$
+So training a denoiser <em>secretly</em> estimates the score of the data at every noise level. And a
+standard result (the reverse-time SDE / probability-flow ODE) says: <strong>following that score field
+from a simple Gaussian back down the noise ladder transports the Gaussian exactly onto the data
+distribution.</strong> In words:</p>
+<ul>
+  <li>At <strong>high noise</strong>, the score encodes coarse structure — <em>which broad region</em>
+  plausible orders live in.</li>
+  <li>At <strong>low noise</strong>, it encodes fine detail — the local shape of the distribution.</li>
+  <li>Composing all levels turns "sample easy Gaussian noise" into "sample from the true, complicated,
+  multi-modal distribution of realistic next-orders."</li>
+</ul>
+<p>Why bother, versus directly writing down $p(\text{order}\mid\text{history})$? Because that
+distribution is wildly complex and multi-modal (the next event could be a tiny cancel, a passive limit,
+or a market-moving sweep) and has no simple formula. But the denoising task <em>at a fixed noise
+level</em> is an ordinary regression the network can nail, and <strong>stacking those regressions yields
+an exact sampler for the intractable distribution.</strong> That is the whole trick — and it is also why
+<em>how</em> you sample (§2.5) can make or break which parts of the distribution you actually reach.</p>
+
+<h3>2.5 Two ways to run the reverse process (this matters enormously)</h3>
+<ul>
+  <li><strong>DDPM</strong> (original, <em>stochastic</em>): all 100 steps, re-injecting noise each step
+  (the $\sigma_t z$ term, with IDDPM's learned $\Sigma_\theta$). Faithful, but <strong>slow</strong>.</li>
+  <li><strong>DDIM / DPM-Solver</strong> (fast, <em>deterministic</em>): drop the injected noise, treat
+  the reverse process as a smooth ODE, take <strong>big jumps</strong> — 10 steps instead of 100, a 10×
+  speed-up. A DDIM step:
+  $$ x_{t-1} = \sqrt{\bar\alpha_{t-1}}\,\hat{x}_0 + \sqrt{1-\bar\alpha_{t-1}-\sigma^2}\,\varepsilon_\theta + \sigma z, \qquad \sigma = \eta\cdot\sqrt{\tilde\beta_t}. $$
+  The dial <strong>$\eta$ (eta)</strong> sets randomness: <strong>$\eta=0$ is fully deterministic</strong>
+  (no $z$ at all), $\eta=1$ ≈ DDPM.</li>
+</ul>
+<div class="callout"><p><strong>The one-sentence tension:</strong> deterministic samplers are fast because
+they <em>stop injecting randomness</em> — but for this problem that randomness turns out to be
+load-bearing.</p></div>
+
+<h2>Part 3 — What TRADES specifically is</h2>
+<p>TRADES (<em>"TRADES: Generating Realistic Market Simulations with Diffusion Models,"</em> Berti,
+Prenkaj &amp; Velardi, 2025, <a href="https://arxiv.org/abs/2502.07071">arXiv:2502.07071</a>) applies the
+Part-2 machinery to generate <strong>one order at a time</strong>.</p>
+
+<h3>3.1 Encoding an order into a vector</h3>
+<p>Diffusion operates on continuous vectors, but an order mixes a <em>category</em> (its type) with
+<em>numbers</em> (size, price, timing). TRADES packs each order into one fixed vector:
+$$ x_0 = [\,\underbrace{\Delta t}_{\text{time gap}},\; \underbrace{e_1,e_2,e_3}_{\text{type embedding}},\; \text{size},\; \text{price},\; \underbrace{\text{dir}}_{\pm 1},\; \text{depth}\,] $$
+Two tricks make heterogeneous fields diffusable:</p>
+<ul>
+  <li><strong>Numeric fields are z-scored</strong> (standardised) with dataset statistics
+  $(\mu,\sigma)$, so each sits on a comparable $\mathcal{N}(0,1)$ scale Gaussian diffusion likes:
+  $\; z_{\text{depth}} = (\text{depth} - \mu_d)/\sigma_d,\ \mu_d \approx 1.38,\ \sigma_d \approx 2.68$
+  (similarly size, price, $\Delta t$).</li>
+  <li><strong>The categorical type is embedded</strong>: three <em>anchor</em> vectors (limit / cancel /
+  market) live in a 3-D space, and an order's type field is set to its anchor — so "type" becomes three
+  continuous coordinates the diffusion can move through smoothly.</li>
+</ul>
+
+<h3>3.2 Decoding a generated vector back into an order</h3>
+<ul>
+  <li><strong>Numbers are de-standardised</strong> and rounded back to integers:
+  $\;\text{depth} = \operatorname{round}(z_{\text{depth}}\sigma_d + \mu_d)$, and likewise for size, price,
+  $\Delta t$.</li>
+  <li><strong>Type is decoded by nearest anchor</strong>: whichever anchor the generated $(e_1,e_2,e_3)$
+  is closest to (L1/L2 distance) wins,
+  $\;\text{type} = \arg\min_k \| (e_1,e_2,e_3) - \text{anchor}_k \|$.</li>
+  <li><strong>Direction</strong> is the sign of its coordinate.</li>
+</ul>
+<p>Note for later: to decode as a price-moving order the depth must come out <strong>negative</strong>,
+which needs the model's latent draw to fall into the lower tail ($z_{\text{depth}} \lesssim -0.5$).</p>
+
+<h3>3.3 The closed loop — why it is a <em>simulator</em></h3>
+<p>The model is <strong>conditioned</strong> on recent history $c$ (the last few hundred orders and
+order-book snapshots): each new order answers "given what just happened, what is a realistic next
+order?" And its own output feeds back as the next input:</p>
+<pre class="diagram">   history c  ──▶  diffusion model  ──▶  new order x₀  ──▶  apply to the order book
+       ▲                                                             │
+       └──────────────  book + order become the new history  ◀───────┘</pre>
+<p>Run this thousands of times and a full trading session emerges. Because it is a <strong>feedback
+loop</strong>, small biases <em>compound</em>: if the model systematically under-produces price-moving
+(negative-depth) orders, the simulated mid-price gradually <strong>freezes</strong>.</p>
+
+<h2>Part 4 — Accelerating TRADES: the problem, and what we are trying</h2>
+
+<h3>4.1 The goal</h3>
+<p>The paper's model works but is slow: ~100 network evaluations per order, times thousands of orders. My
+thesis is about <strong>accelerating</strong> it — getting the same realism from a ~10-step deterministic
+sampler (a 10× speed-up) so the simulator is practical to run.</p>
+
+<h3>4.2 Trying faster solvers, and what breaks</h3>
+<p>So we swapped the slow stochastic DDPM (100 steps) for fast deterministic solvers (DDIM, DPM-Solver,
+DPM-Solver++, UniPC — 10 steps, $\eta=0$). The market <strong>freezes</strong>:</p>
+<table>
+  <thead><tr><th></th><th>unique mid-prices / session</th><th>book behaviour</th></tr></thead>
+  <tbody>
+    <tr><td>Real market</td><td>~69</td><td>prices move continuously</td></tr>
+    <tr><td>DDPM (slow, stochastic)</td><td>~100</td><td>healthy, moves</td></tr>
+    <tr><td><strong>DDIM (fast, deterministic)</strong></td><td><strong>~9–17</strong></td>
+        <td><strong>frozen; giant "walls" of stuck orders</strong></td></tr>
+  </tbody>
+</table>
+<p>The price stops moving and the book piles up huge volumes (40,000+ shares vs a realistic ~2,000).
+Notably, using a <em>more accurate</em> deterministic solver does not help — which is the first clue that
+this is not solver <em>error</em>.</p>
+
+<h3>4.3 Investigating why</h3>
+<p>Three linked facts explain the freeze:</p>
+<ol>
+  <li><strong>A few-step deterministic sampler collapses to the <em>average</em>.</strong> With randomness
+  off and only a few big jumps, the reverse process integrates toward the <em>conditional mean</em> of
+  what comes next — and the average order is a small, passive limit order.</li>
+  <li><strong>Price-moving orders live in the tail, and the tail needs randomness.</strong> Recall a
+  price-moving order needs <em>negative</em> depth, i.e. a latent draw well below average
+  ($z_{\text{depth}} \lesssim -0.5$). The per-step noise in stochastic DDPM regularly produces such draws
+  → occasional aggressive orders → the price moves. A deterministic sampler sits at the mean and
+  essentially <em>never</em> dips negative → no aggressive orders → <strong>frozen price</strong>. DDPM
+  works precisely <em>because</em> its noise keeps re-sampling that tail.</li>
+  <li><strong>The diversity is decided <em>early</em>.</strong> We confirmed this with a controlled test:
+  putting the randomness in the <em>early</em> (high-noise) steps un-freezes the market, whereas adding it
+  only in the <em>late</em> steps does not. Once the early steps have collapsed to the mean, no amount of
+  late-stage noise recovers the lost variety.</li>
+</ol>
+<p>We also checked and ruled out the boring explanations — it is not a start-step misalignment, not
+out-of-distribution input prices (DDPM runs fine on the identical conditioning), and not a flipped
+convention. And a "sharpen the conditioning" knob (classifier-free guidance) does not fix it either,
+which is expected: guidance reshapes the <em>mean</em>; it adds no <em>variance</em>, and this is a
+missing-variance problem.</p>
+<div class="callout"><p><strong>Where the investigation lands:</strong> the freeze is a <em>variance</em>
+phenomenon centred on the <strong>depth channel</strong>. Under deterministic sampling the depth output
+collapses to a near-constant that sits right on the boundary between passive and price-moving — so the
+market simply never crosses the spread.</p></div>
+
+<h3>4.4 What we tried, and what we are trying now</h3>
+<p><strong>(A) A "churn" sampler — add back just enough randomness (no retraining). <em>Tried;
+negative result.</em></strong> Since the diversity is set in the early steps, we used the fast,
+accurate deterministic solver for most steps but on the first few deliberately <strong>re-injected
+noise</strong> (an idea from the "EDM" diffusion literature), controlled by a strength dial $\kappa$:
+$$ \hat{\bar\alpha}_t = \bar\alpha_t\,(1-\kappa), \qquad \hat{x} = \sqrt{\tfrac{\hat{\bar\alpha}_t}{\bar\alpha_t}}\,x_t + \sqrt{1 - \tfrac{\hat{\bar\alpha}_t}{\bar\alpha_t}}\; z. $$
+In words: nudge the sample back to a slightly noisier state before denoising, only on the steps that
+matter, by a tunable amount. $\kappa=0$ is the pure fast sampler; turning $\kappa$ up re-introduces
+the tail-exploring randomness. We swept it across five checkpoints and two strengths. The result: no
+combination lands near real. Every cell is either still frozen (under 2% marketable orders) or
+suddenly overshoots into a hyperactive, diverging market (35–47% marketable, far more unique
+mid-prices than the real session) — the same cliff-not-dial shape we had already seen with a
+depth-scaling knob, just relocated onto a different control. Sampler-side tricks (a guidance-scale
+knob, a depth-scaling knob, sampler-ordering hybrids, and now this) have now all hit the identical
+wall: a binary frozen/diverging outcome with no controllable realistic middle.</p>
+
+<p><strong>(B) The current experiment — a data hypothesis: does training ever <em>show</em> the model
+a price-moving order?</strong> Because every sampler-side lever hits the same wall, the next
+hypothesis moves upstream, to what the model was trained on. One preprocessing detail stands out.
+When the real data is prepared for training, a single line clamps depth to be non-negative,
+$\;\text{depth} \leftarrow \max(\text{depth}, 0)$, which would <strong>erase the negativity of every
+aggressive order before training begins</strong>. If so, the model is never shown a price-moving order
+as a target and can only ever reproduce aggression as sampling <em>noise</em> — which would neatly
+explain why removing the noise removes the movement, and why every noise-shaped fix (guidance, depth
+temperature, hybrids, churn) hits the same cliff rather than a controllable dial. The experiment,
+now running: retrain on the honest, <em>signed</em> depth and see whether even a fully deterministic
+fast sampler then moves the market. If it does, the freeze was a data-preparation artifact rather
+than a limitation of fast diffusion samplers.</p>
+
+<h3>4.5 Why this is worthwhile either way</h3>
+<ul>
+  <li>Churn's negative result is still useful: it closes off the entire family of sampler-side fixes
+  and sharpens the case that the problem is upstream, in the training data.</li>
+  <li>If <strong>unclamping</strong> works: we show that a published model's most dramatic failure under
+  acceleration is really a one-line data-preprocessing artifact, and exactly how to fix it — a clean,
+  cautionary result about how invisible preprocessing choices silently constrain what generative models
+  can learn.</li>
+</ul>
+
+<hr>
+
+<h2>Part 5 — Appendix: every hypothesis and test</h2>
+<p>The full log of candidate explanations we considered and how each was tested. "Verdict" reads:
+<span class="badge b-ref">refuted</span> ruled out as the cause,
+<span class="badge b-part">partial</span> a real effect but not the freeze,
+<span class="badge b-conf">confirmed</span> part of the actual mechanism,
+<span class="badge b-fix">harness</span> an infrastructure fix,
+<span class="badge b-next">open</span> in progress / next.</p>
+
+<div class="scroll">
+<table class="log">
+<thead><tr><th>#</th><th>Hypothesis / question</th><th>How we tested it</th><th>Result</th><th>Verdict</th></tr></thead>
+<tbody>
+  <tr class="cat"><td></td><td colspan="4"><span class="catlbl">Harness — make the experiments trustworthy first</span></td></tr>
+  <tr><td>1</td><td>The order generator can hang forever on a bad model</td><td>Cap the resample loop at 100 attempts, then reschedule</td><td>No more silent hangs in long sweeps</td><td><span class="badge b-fix">harness</span></td></tr>
+  <tr><td>2</td><td>Full-step deterministic sampler crashes (index out of bounds)</td><td>Clamp the step index</td><td>Sampler runnable at every step count</td><td><span class="badge b-fix">harness</span></td></tr>
+  <tr><td>3</td><td>Different settings overwrite each other's output</td><td>Encode the active flags into the output folder name</td><td>Results become attributable</td><td><span class="badge b-fix">harness</span></td></tr>
+
+  <tr class="cat"><td></td><td colspan="4"><span class="catlbl">Cheap causes refuted by inspection</span></td></tr>
+  <tr><td>4</td><td>Fast sampler starts from the wrong noise level</td><td>Compare noise std at the two start steps</td><td>Differ by 0.8%; input is pure noise either way</td><td><span class="badge b-ref">refuted</span></td></tr>
+  <tr><td>5</td><td>Conditioning prices are out-of-distribution</td><td>Run DDPM on the <em>identical</em> conditioning</td><td>DDPM doesn't freeze → OOD prices aren't the cause</td><td><span class="badge b-ref">refuted</span></td></tr>
+  <tr><td>6</td><td>A convention is flipped (sign / depth formula / event map)</td><td>Line-by-line audit of training vs simulation code</td><td>Consistent</td><td><span class="badge b-ref">refuted</span></td></tr>
+
+  <tr class="cat"><td></td><td colspan="4"><span class="catlbl">Feedback-loop ("plumbing") hypotheses — each a toggle flag</span></td></tr>
+  <tr><td>7</td><td>H1 — the "time since last order" feature is frozen during generation</td><td><code>--fix-time</code></td><td>A real train/sim mismatch, but toggling it does not unfreeze</td><td><span class="badge b-ref">refuted</span></td></tr>
+  <tr><td>8</td><td>H2 — type decodes to "limit" by default (anchors not equidistant)</td><td><code>--type-decode l2</code> and a Bayesian prior-corrected decode</td><td>Fixed the market-order <em>rate</em>; price still froze → type &amp; depth are independent axes</td><td><span class="badge b-part">partial</span></td></tr>
+  <tr><td>9</td><td>H3 — cancels silently dropped when no match is found</td><td><code>--fix-cancel-bind</code></td><td>Flow tidier, better observability; no unfreeze</td><td><span class="badge b-ref">refuted</span></td></tr>
+  <tr><td>10</td><td>H5 — order-book padding inverted (zeros vs sentinels)</td><td><code>--fix-lob-pad</code></td><td>A real inconsistency fixed; no unfreeze</td><td><span class="badge b-ref">refuted</span></td></tr>
+  <tr><td>11</td><td>H7 — partial-cancels leak into conditioning (dropped in training)</td><td><code>--drop-type2-cond</code></td><td>Tidied; no unfreeze</td><td><span class="badge b-ref">refuted</span></td></tr>
+
+  <tr class="cat"><td></td><td colspan="4"><span class="catlbl">The sampler itself — the actual mechanism</span></td></tr>
+  <tr><td>12</td><td>H0 — deterministic sampling collapses to the conditional <em>mean</em></td><td>Built an open-loop test: generate one order from <em>real</em> history, no feedback loop</td><td>Depth collapse reproduced without any feedback → it's the model×sampler, not plumbing</td><td><span class="badge b-conf">confirmed</span></td></tr>
+  <tr><td>13</td><td>Missing per-step randomness is what freezes it</td><td>DDIM at $\eta=0$ vs $\eta=1$</td><td>$\eta=0$ frozen; $\eta=1$ moves</td><td><span class="badge b-conf">confirmed</span></td></tr>
+  <tr><td>14</td><td>Does the randomness need to be early or late?</td><td>Two mirror hybrids: fast-head/stochastic-tail vs stochastic-head/fast-tail</td><td>Late-only stays frozen; early moves → diversity is set in the early, high-noise steps</td><td><span class="badge b-conf">confirmed</span></td></tr>
+  <tr><td>15</td><td>Is it solver <em>inaccuracy</em>?</td><td>Add more accurate solvers: DPM-Solver, DPM-Solver++, UniPC</td><td>More accurate, still frozen → it's variance, not solver error</td><td><span class="badge b-ref">refuted</span></td></tr>
+
+  <tr class="cat"><td></td><td colspan="4"><span class="catlbl">The depth channel</span></td></tr>
+  <tr><td>16</td><td>The collapsed depth just needs "spreading out"</td><td><code>--depth-temp</code> — scale the depth channel</td><td>A cliff, not a dial (0% marketable → ~55% with no useful middle): the output is a spike on the boundary → problem is upstream</td><td><span class="badge b-part">partial</span></td></tr>
+
+  <tr class="cat"><td></td><td colspan="4"><span class="catlbl">Training &amp; checkpoint</span></td></tr>
+  <tr><td>17</td><td>A better / more-trained checkpoint fixes it</td><td>Compare several checkpoints under the fast sampler</td><td>Hyper-sensitive; the best validation-loss checkpoint is not the best-simulating; DDPM robust across all</td><td><span class="badge b-ref">refuted</span></td></tr>
+  <tr><td>18</td><td>Sharpening the conditioning fixes it (classifier-free guidance)</td><td>Retrain with dropout; sweep guidance $w = 0.7, 1.0, 1.5$</td><td>Barely moved, non-monotonic — guidance reshapes the mean, adds no variance</td><td><span class="badge b-ref">refuted</span></td></tr>
+  <tr><td>19</td><td>The dropout retrain itself un-freezes the market</td><td>Full sampler battery on the new checkpoint</td><td>Still frozen (~9–17 unique mids)</td><td><span class="badge b-ref">refuted</span></td></tr>
+
+  <tr class="cat"><td></td><td colspan="4"><span class="catlbl">Cross-checks</span></td></tr>
+  <tr><td>20</td><td>Do standard realism metrics even catch the freeze?</td><td>Score against LOB-Bench (a published benchmark)</td><td>The frozen DDIM matches real <em>marginal histograms</em> better → distributional realism ≠ dynamic realism; static metrics miss a dead market</td><td><span class="badge b-conf">insight</span></td></tr>
+  <tr><td>21</td><td>Does the paper itself rely on the fast sampler?</td><td>Cross-check the paper and its released dataset</td><td>Headline results use the slow stochastic DDPM; single-step DDIM is disclosed as a lossy acceleration</td><td><span class="badge b-fix">context</span></td></tr>
+
+  <tr class="cat"><td></td><td colspan="4"><span class="catlbl">Sampler-side fixes — all now exhausted</span></td></tr>
+  <tr><td>22</td><td>Add back <em>just enough</em> early randomness on a fast solver</td><td>The "churn" sampler with a strength dial $\kappa$, swept across 5 checkpoints</td><td>Same cliff as depth-temp: frozen or overshooting (35–47% marketable, 80–160+ mids), no stable middle at any checkpoint/κ</td><td><span class="badge b-ref">refuted</span></td></tr>
+
+  <tr class="cat"><td></td><td colspan="4"><span class="catlbl">What we are trying now</span></td></tr>
+  <tr><td>23</td><td>Training never <em>shows</em> the model a price-moving order</td><td>Retrain on signed depth (remove the <code>max(depth,0)</code> clamp)</td><td>Launched</td><td><span class="badge b-next">open</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<hr>
+
+<h2>Glossary</h2>
+<dl class="glossary">
+  <dt>LOB (Limit Order Book)</dt><dd>the ledger of all resting buy/sell orders for a stock.</dd>
+  <dt>Bid / Ask / Spread</dt><dd>best buy price / best sell price / the gap between them.</dd>
+  <dt>Mid-price</dt><dd>midpoint of bid and ask; the reference "current price."</dd>
+  <dt>Limit / Market / Cancel order</dt><dd>rests in the book / executes immediately (moves price) /
+  withdraws.</dd>
+  <dt>Depth</dt><dd>how far into the book an order sits; <strong>negative = aggressive, price-moving.</strong></dd>
+  <dt>Diffusion model</dt><dd>an AI that generates data by learning to reverse a noising process.</dd>
+  <dt>Forward / reverse process</dt><dd>adding noise to data / removing it to create new data.</dd>
+  <dt>Score / score matching</dt><dd>the gradient of the log-density; denoising secretly estimates it,
+  which is why it can reconstruct a whole distribution.</dd>
+  <dt>Tweedie's formula</dt><dd>the identity that the best denoiser equals the distribution-aware
+  posterior mean of the clean data.</dd>
+  <dt>ε- / x₀- / v-prediction</dt><dd>equivalent choices of what the network outputs.</dd>
+  <dt>IDDPM / learned variance</dt><dd>letting the model predict how much noise to re-inject per step.</dd>
+  <dt>DDPM</dt><dd>the slow, <em>stochastic</em> sampler (re-adds randomness each step) — realistic here.</dd>
+  <dt>DDIM / DPM-Solver / UniPC</dt><dd>fast, <em>deterministic</em> samplers — freeze here.</dd>
+  <dt>η (eta)</dt><dd>DDIM's randomness dial; 0 = deterministic, 1 = DDPM-like.</dd>
+  <dt>Conditioning (c)</dt><dd>the recent market history the model may look at.</dd>
+  <dt>Closed loop</dt><dd>feeding the model's own output back as its next input, making it a simulator.</dd>
+  <dt>Churn / κ</dt><dd>our method of re-injecting a tunable amount of randomness into a fast sampler.</dd>
+  <dt>Depth clamp</dt><dd>the <code>max(depth, 0)</code> preprocessing line — the leading hypothesis for
+  the freeze, to be tested next.</dd>
+  <dt>ABIDES</dt><dd>the agent-based market simulation framework TRADES runs inside.</dd>
+  <dt>TRADES</dt><dd>the diffusion-based market simulator this project accelerates (arXiv:2502.07071).</dd>
+</dl>
+
+</div>
+</body>
+</html>
