@@ -134,6 +134,15 @@ def run(config: Configuration, accelerator, model=None):
         profiler=None,
         check_val_every_n_epoch=1,
         val_check_interval=0.5,
+        # KEEP_EPOCH_CHECKPOINTS saves ONE checkpoint per epoch (diffusion_engine.py:326), so more
+        # frequent validation does not yield more checkpoints — only shorter epochs do. Setting this
+        # below 1.0 shortens each epoch proportionally, giving many more early checkpoints for the
+        # behavioural stability search to trial. 1.0 = unchanged.
+        limit_train_batches=float(os.environ.get("LIMIT_TRAIN_BATCHES", 1.0)),
+        # Restored: dropped as collateral by b49e983 (2026-07-03) when hyperparameters were reset.
+        # Part of the 2026-06-27 stability set that fixed the VLB loss spike; without it a spike can
+        # poison the LossSecondMomentResampler history and lock training at an elevated loss.
+        gradient_clip_val=1.0,
     )
     train(config, trainer)
 
@@ -187,6 +196,8 @@ def run_wandb(config: Configuration, accelerator):
             profiler=None,
             val_check_interval=0.5,
             check_val_every_n_epoch=1,
+            limit_train_batches=float(os.environ.get("LIMIT_TRAIN_BATCHES", 1.0)),
+            gradient_clip_val=1.0,
         )
 
         # log simulation details in WANDB console

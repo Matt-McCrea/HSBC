@@ -167,13 +167,22 @@ class LOB_Charts(Enum):      #Qualitative evaluation
     num_lim_orders_time_SEQ = 'num_lim_orders_time_SEQ'
 
 
-class Stocks(Enum):
-    APPL = "AAPL"
-    INTC = "INTC"
-    TSLA = "TSLA"
-    AVXL = "AVXL"
-    GOOG = "GOOG"
-    AAME = "AAME"
+# Ticker set. Built dynamically so a new Nasdaq symbol can be run through the whole pipeline by
+# setting TICKER=<SYMBOL> rather than editing this file. With TICKER unset the members are exactly
+# the six originals, so existing behaviour is unchanged.
+_STOCK_VALUES = {
+    "APPL": "AAPL",
+    "INTC": "INTC",
+    "TSLA": "TSLA",
+    "AVXL": "AVXL",
+    "GOOG": "GOOG",
+    "AAME": "AAME",
+}
+_TICKER_ENV = os.environ.get("TICKER")
+if _TICKER_ENV and _TICKER_ENV not in _STOCK_VALUES:
+    _STOCK_VALUES[_TICKER_ENV] = _TICKER_ENV
+
+Stocks = Enum("Stocks", _STOCK_VALUES)
 
 
 class OrderEvent(Enum):
@@ -271,7 +280,10 @@ LEN_LEVEL = 4
 LEN_ORDER = 6
 LEN_ORDER_CGAN = 7
 
-DATE_TRADING_DAYS = ["2015-01-02", "2015-01-30"]
+# First and last trading day of the period, inclusive. Overridable so a different stock-month can be
+# run without editing this file; defaults reproduce the INTC January 2015 period exactly.
+DATE_TRADING_DAYS = [os.environ.get("TRADING_START", "2015-01-02"),
+                     os.environ.get("TRADING_END", "2015-01-30")]
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 DIR_EXPERIMENTS = "data/experiments"
 DIR_SAVED_MODEL = "data/checkpoints"

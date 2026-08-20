@@ -1,3 +1,5 @@
+import os
+
 from constants import LearningHyperParameter, LearningHyperParameter
 import constants as cst
 from utils.utils import noise_scheduler
@@ -34,8 +36,10 @@ class Configuration:
         if self.CHOSEN_MODEL == cst.Models.CGAN:
             cst.PROJECT_NAME = "CGAN"
 
-        # select a stock 
-        self.CHOSEN_STOCK = [cst.Stocks.INTC]
+        # select a stock — TICKER env var so a different symbol can be run without editing this
+        # file. Unset defaults to INTC, i.e. existing behaviour unchanged. The symbol must exist in
+        # cst.Stocks, which admits arbitrary tickers when TICKER is set (see constants.py).
+        self.CHOSEN_STOCK = [cst.Stocks[os.environ.get("TICKER", "INTC")]]
 
         self.WANDB_INSTANCE = None
         self.WANDB_RUN_NAME = None
@@ -76,7 +80,11 @@ class Configuration:
         self.HYPER_PARAMETERS[LearningHyperParameter.SIZE_ORDER_EMB] = cst.LEN_ORDER + self.HYPER_PARAMETERS[LearningHyperParameter.SIZE_TYPE_EMB] - 1
         
         self.HYPER_PARAMETERS[LearningHyperParameter.LAMBDA] = 0.01       #its the parameter used in the loss function to prevent L_vlb from overwhleming L_simple
-        self.HYPER_PARAMETERS[LearningHyperParameter.P_NORM] = 2 if self.CHOSEN_STOCK == cst.Stocks.INTC else 5
+        # NOTE: CHOSEN_STOCK is a LIST, so the original `== cst.Stocks.INTC` was always False and
+        # P_NORM was always 5, including for INTC. Corrected to a membership test. This is inert in
+        # practice — P_NORM is written here and read nowhere in the codebase — so no existing result
+        # changes; it is fixed so the config does not mislead.
+        self.HYPER_PARAMETERS[LearningHyperParameter.P_NORM] = 2 if cst.Stocks.INTC in self.CHOSEN_STOCK else 5
         self.HYPER_PARAMETERS[LearningHyperParameter.REG_TERM_WEIGHT] = 1
         self.HYPER_PARAMETERS[LearningHyperParameter.CDT_DEPTH] = 8
         self.HYPER_PARAMETERS[LearningHyperParameter.CDT_MLP_RATIO] = 4

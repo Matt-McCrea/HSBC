@@ -9,19 +9,37 @@
 # Runs on the SAME checkpoint the sweep auto-discovered (val_ema=0.627 by default; --id to pin).
 # Both flag files (UNCLAMP + REANCHOR) must be ON — the reanchored ckpt was trained with both.
 #
-# Usage:  bash scripts/exec_bracket.sh                 # auto-discover newest ckpt
-#         bash scripts/exec_bracket.sh --id 0.627      # pin a checkpoint
+# TICKER-PORTABLE: --ticker/--date/--st/--et/--seed drive the run and the matched real replay path.
+# The sigma that pins execution to real is a property of the STOCK (tick size, price level, typical
+# depth), not of the method — INTC's 0.3 must not be carried across. Re-bracket per ticker.
+#
+# Usage:  bash scripts/exec_bracket.sh                 # auto-discover newest ckpt (INTC defaults)
+#         bash scripts/exec_bracket.sh --id 0.627      # pin a checkpoint by val_ema
+#         bash scripts/exec_bracket.sh --ticker MSFT --date 20150331 \
+#              --ckpt-path data/checkpoints/TRADES/<file>.ckpt --sigmas "0.2 0.3 0.4"
 
 set -uo pipefail
-TICKER="INTC"; DATE="20150130"; ST="09:30:00"; ET="10:00:00"
-CKPT_DIR="data/checkpoints/TRADES"; ID=""
+TICKER="INTC"; DATE="20150130"; ST="09:30:00"; ET="10:00:00"; SEED="30"
+CKPT_DIR="data/checkpoints/TRADES"; ID=""; CKPT_PATH=""
 SIGMAS="0.10 0.125 0.15"                         # override with --sigmas "0.16 0.17 0.18"
-REAL="ABIDES/log/market_replay_${TICKER}_2015-01-30_10-00-00_30/processed_orders.csv"
+REAL=""                                          # derived from ticker/date/window below
 OUT_DIR="exec_bracket/$(date +%Y%m%d_%H%M%S)"
 while [[ $# -gt 0 ]]; do case "$1" in
   --id) ID="$2"; shift 2;; --out-dir) OUT_DIR="$2"; shift 2;;
   --sigmas) SIGMAS="$2"; shift 2;;
+  --ticker) TICKER="$2"; shift 2;;               # any symbol; the sigma that pins exec to real is
+  --date) DATE="$2"; shift 2;;                   #   ticker-specific, so never reuse INTC's 0.3
+  --st) ST="$2"; shift 2;; --et) ET="$2"; shift 2;;
+  --seed) SEED="$2"; shift 2;;
+  --ckpt-path) CKPT_PATH="$2"; shift 2;;         # exact file, bypasses -id val_ema matching
+  --real) REAL="$2"; shift 2;;
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
+
+# Real replay path follows market_replay_{TICKER}_{YYYY-MM-DD}_{ET with : -> -}_{SEED}.
+if [[ -z "$REAL" ]]; then
+  _D="${DATE:0:4}-${DATE:4:2}-${DATE:6:2}"
+  REAL="ABIDES/log/market_replay_${TICKER}_${_D}_${ET//:/-}_${SEED}/processed_orders.csv"
+fi
 mkdir -p "$OUT_DIR/logs"; SUM="$OUT_DIR/summary.md"
 
 if pgrep -f "main.py" > /dev/null; then
@@ -35,15 +53,25 @@ echo "flags -> UNCLAMP_DEPTH PRICE_REANCHOR = $PRECHECK"
 [[ "$PRECHECK" == "True True" ]] || { echo "!! flags not True True — refusing. Got: $PRECHECK"; exit 1; }
 
 valof () { basename "$1" | sed -E 's/^[^=]*=([0-9.]+).*/\1/'; }
-if [[ -z "$ID" ]]; then
+if [[ -n "$CKPT_PATH" ]]; then
+  [[ -f "$CKPT_PATH" ]] || { echo "!! --ckpt-path not found: $CKPT_PATH"; exit 1; }
+  echo "using exact checkpoint: $(basename "$CKPT_PATH")"
+elif [[ -z "$ID" ]]; then
   NEWEST=$(ls -t "$CKPT_DIR"/*.ckpt 2>/dev/null | head -1)
   [[ -n "$NEWEST" ]] || { echo "!! no .ckpt in $CKPT_DIR"; exit 1; }
   ID=$(valof "$NEWEST"); echo "auto-discovered: $(basename "$NEWEST") -> -id $ID"
 fi
-COLLIDE=$(for f in "$CKPT_DIR"/*.ckpt; do valof "$f"; done | grep -Fxc "$ID" || true)
-[[ "${COLLIDE:-0}" -le 1 ]] || { echo "!! $COLLIDE ckpts share val_ema=$ID — archive strays. Refusing."; exit 1; }
+# val_ema matching cannot disambiguate two checkpoints sharing a rounded value — only relevant when
+# selecting by -id, not when an exact path was given.
+if [[ -z "$CKPT_PATH" ]]; then
+  COLLIDE=$(for f in "$CKPT_DIR"/*.ckpt; do valof "$f"; done | grep -Fxc "$ID" || true)
+  [[ "${COLLIDE:-0}" -le 1 ]] || { echo "!! $COLLIDE ckpts share val_ema=$ID — archive strays. Refusing."; exit 1; }
+fi
 
-echo "# Exec bracket — $(date '+%F %T')  ckpt val_ema=$ID  (target: real exec 7.0%)" > "$SUM"
+CKPT_LABEL="${CKPT_PATH:-val_ema=$ID}"
+echo "# Exec bracket — $(date '+%F %T')  $TICKER $DATE $ST-$ET  ckpt $(basename "$CKPT_LABEL")" > "$SUM"
+echo "Target: this ticker's OWN real execution share on this window (read it off the REAL row below" >> "$SUM"
+echo "in each cell). Do NOT reuse INTC's 7.0% or its sigma=0.3 — both are ticker-specific." >> "$SUM"
 
 run () { # run <tag> <extra>
   local TAG="$1" EXTRA="$2"
@@ -51,7 +79,8 @@ run () { # run <tag> <extra>
   echo "-- $TAG"
   local S; S=$(mktemp); touch "$S"; local T0; T0=$(date +%s)
   local A=(python ABIDES/abides.py -c world_agent_sim -t "$TICKER" -date "$DATE" -st "$ST" -et "$ET"
-           -d True -m TRADES -type DDIM -nsteps 10 -eta 0.0 -id "$ID")
+           -d True -m TRADES -type DDIM -nsteps 10 -eta 0.0 -seed "$SEED")
+  if [[ -n "$CKPT_PATH" ]]; then A+=(--ckpt-path "$CKPT_PATH"); else A+=(-id "$ID"); fi
   # shellcheck disable=SC2206
   A+=($EXTRA)
   echo "   ${A[*]}"
