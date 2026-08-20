@@ -107,6 +107,13 @@ if __name__ == "__main__":
                         help="exact TRADES checkpoint to simulate with; default = lowest val-loss for the symbol")
     parser.add_argument("--side", default=None, choices=["BUY", "SELL"],
                         help="fix the parent-order side; default = randomised per episode")
+    parser.add_argument("--world-mode", choices=["generative", "replay"], default="generative",
+                        help="replay trains against the REAL message stream from t0 instead of a "
+                             "generated one: no diffusion sampling, so no model is loaded and no "
+                             "GPU is needed. Training this way is the conventional historical-replay "
+                             "pipeline, and its known limitation is that replayed orders never react "
+                             "to the agent -- so the agent can learn to be aggressive at no cost that "
+                             "a real market would have charged it")
     parser.add_argument("--checkpoint", default="checkpoints/qtable.npz",
                         help="where to save/resume the Q-table (not the TRADES checkpoint -- see --ckpt-path)")
     parser.add_argument("--checkpoint-every", type=int, default=25)
@@ -144,7 +151,8 @@ if __name__ == "__main__":
     env = ExecutionEnv(symbol=args.symbol, data_dir=args.data_dir, sampling_type=args.sampling_type,
                         ddim_nsteps=args.ddim_nsteps, depth_noise=args.depth_noise,
                         checkpoint_path=args.ckpt_path,
-                        reward_mode=args.reward_mode, reward_benchmark=args.reward_benchmark)
+                        reward_mode=args.reward_mode, reward_benchmark=args.reward_benchmark,
+                        world_mode=args.world_mode)
     train(env, policy, args.n_episodes, args.checkpoint, checkpoint_every=args.checkpoint_every,
           run_name=args.run_name, out_path=args.out, side=args.side, max_hours=args.max_hours,
           inventory_penalty_lambda=args.inventory_penalty)

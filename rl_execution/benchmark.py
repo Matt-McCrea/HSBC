@@ -20,10 +20,16 @@ from rl_execution.logging_utils import (JsonlLogger, drift_bps as _drift,
                                          shortfall_bps as _bps, trajectory_step as _traj)
 
 
-def run_benchmark(env: ExecutionEnv, n_episodes: int, policy=None, run_name="benchmark", out_path="logs/benchmark.jsonl"):
+def run_benchmark(env: ExecutionEnv, n_episodes: int, policy=None, run_name="benchmark",
+                   out_path="logs/benchmark.jsonl", side=None):
     """policy(obs) -> action index; defaults to a uniform-random policy over
     the 5 action levels (this harness measures the environment, not a
     specific agent's quality).
+
+    side fixes the parent-order side rather than drawing it per episode. That matters
+    when these episodes feed calibration: sigma, eta and especially the drift t-stat
+    are side-sensitive in a drifting market, so calibrating from a mixed-side sample
+    and then training single-sided measures one thing and applies it to another.
     """
     rng = np.random.RandomState()
     policy = policy or (lambda obs: rng.randint(0, 5))
@@ -32,7 +38,7 @@ def run_benchmark(env: ExecutionEnv, n_episodes: int, policy=None, run_name="ben
     records = []
     for ep in range(n_episodes):
         ep_start = time.perf_counter()
-        obs, info = env.reset()
+        obs, info = env.reset(side=side)
         done = False
         trajectory = []
         while not done:
@@ -108,6 +114,10 @@ if __name__ == "__main__":
                              "reward variance). Reported shortfall is always vs arrival either way")
     parser.add_argument("--ckpt-path", default=None,
                         help="exact TRADES checkpoint to simulate with; default = lowest val-loss for the symbol")
+    parser.add_argument("--side", default=None, choices=["BUY", "SELL"],
+                        help="fix the parent-order side; default = randomised per episode. "
+                             "Match this to the side training will use, so calibration measures "
+                             "the regime the agent will actually trade in")
     parser.add_argument("--world-mode", choices=["generative", "replay"], default="generative",
                         help="replay plays the REAL message stream from t0 rather than "
                              "generating one: no diffusion, so no model is loaded and no GPU "
@@ -121,4 +131,5 @@ if __name__ == "__main__":
                         checkpoint_path=args.ckpt_path,
                         reward_mode=args.reward_mode, reward_benchmark=args.reward_benchmark,
                         world_mode=args.world_mode)
-    run_benchmark(env, args.n_episodes, run_name=args.run_name, out_path=args.out)
+    run_benchmark(env, args.n_episodes, run_name=args.run_name, out_path=args.out,
+                   side=args.side)

@@ -116,3 +116,56 @@ def test_env_replay_mode_skips_model_loading():
     src = inspect.getsource(ExecutionEnv.__init__)
     assert 'if world_mode == "replay"' in src
     assert "self.model, self.config, self.checkpoint_path = None, None, None" in src
+
+
+# --- historic-data arm: the flags that let the 2x2 run ------------------------------
+
+def test_train_exposes_world_mode_and_passes_it_to_the_env():
+    """Training on replay is the conventional historical pipeline, and cell B of the
+    2x2. Without this flag train.py can only ever build a generative env."""
+    import inspect
+    import rl_execution.train as train_mod
+    src = inspect.getsource(train_mod)
+    assert '"--world-mode"' in src, "train must expose --world-mode"
+    assert "world_mode=args.world_mode" in src, "and forward it into ExecutionEnv"
+
+
+def test_benchmark_forwards_side_to_reset():
+    """Calibration episodes must be able to match the side training will use: sigma and
+    the drift t-stat are side-sensitive in a drifting market."""
+    import inspect
+    from rl_execution.benchmark import run_benchmark
+    src = inspect.getsource(run_benchmark)
+    assert "env.reset(side=side)" in src
+
+
+def test_forcing_side_leaves_days_t0_and_Q_untouched():
+    """--side must change only the side, or the forced run stops being comparable with
+    the mixed-side run it is meant to sit beside."""
+    from rl_execution.evaluate import generate_held_out_seeds
+    mixed = generate_held_out_seeds("data", "INTC", 6, seed=123)
+    sell = generate_held_out_seeds("data", "INTC", 6, seed=123, side="SELL")
+    assert all(s["side"] == "SELL" for s in sell)
+    for a, b in zip(mixed, sell):
+        assert (a["seed_day"], a["t0"], a["Q"]) == (b["seed_day"], b["t0"], b["Q"])
+
+
+def test_episode_seed_is_positional_so_policies_share_a_market():
+    """Common random numbers: seed i must map to the same episode RNG for every policy
+    and every world mode, otherwise the paired comparison still carries market noise."""
+    import inspect
+    from rl_execution.evaluate import evaluate_policy
+    src = inspect.getsource(evaluate_policy)
+    assert "for i, s in enumerate(seeds)" in src
+    assert "int(episode_seed_base) + i" in src
+    # Absent a base the behaviour must be exactly as before -- generative runs already
+    # committed to logs should not silently change meaning.
+    assert "None if episode_seed_base is None else" in src
+
+
+def test_run_comparison_derives_the_seed_base_from_eval_seed():
+    import inspect
+    from rl_execution.evaluate import run_comparison
+    src = inspect.getsource(run_comparison)
+    assert "episode_seed_base = eval_seed" in src, "must be stable across arms, not ad hoc"
+    assert src.count("episode_seed_base=episode_seed_base") >= 2, "both arms must use it"

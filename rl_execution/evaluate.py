@@ -60,20 +60,35 @@ def generate_held_out_seeds(data_dir, symbol, n_seeds, seq_len=256, episode_seco
 
 
 def evaluate_policy(env: ExecutionEnv, policy, seeds, logger: JsonlLogger, run_name, policy_name,
-                     wall_clock_budget=None):
+                     wall_clock_budget=None, episode_seed_base=None):
     """Run `policy` (greedy, no exploration) across `seeds` in order, stopping
     early if wall_clock_budget (seconds) is exhausted -- used to budget-match
     the DDPM-100 arm to the depth-noise arm's actual wall-clock usage.
     Returns (shortfalls, wall_clock_used, n_episodes_run).
+
+    episode_seed_base makes each episode's RNG a deterministic function of its position
+    in the seed list, so every policy meets the SAME market at seed i -- common random
+    numbers, which removes market noise from a paired comparison rather than merely
+    averaging over it.
+
+    This is exact in replay mode and only partial in generative mode. Replay touches no
+    torch and every RNG source in the episode descends from env.rng (see env.reset), so
+    a seeded replay episode reproduces bit-for-bit. Generative sampling also draws from
+    torch's global RNG, which nothing here seeds, so identical seeds still diverge --
+    which is why identical policies scored 0.026 vs 0.048 bps across the two frontier
+    arms. Passing a base is therefore worth it either way but only load-bearing here.
     """
     shortfalls = []
     wall_clock_used = 0.0
     n_run = 0
-    for s in seeds:
+    for i, s in enumerate(seeds):
         if wall_clock_budget is not None and wall_clock_used >= wall_clock_budget:
             break
         start = time.perf_counter()
-        obs, info = env.reset(t0=s["t0"], side=s["side"], Q=s["Q"], seed_day=s["seed_day"])
+        # None leaves env.rng untouched, preserving the previous behaviour exactly.
+        ep_seed = None if episode_seed_base is None else int(episode_seed_base) + i
+        obs, info = env.reset(t0=s["t0"], side=s["side"], Q=s["Q"], seed_day=s["seed_day"],
+                               seed=ep_seed)
         done = False
         reward = 0.0
         trajectory = []
@@ -134,6 +149,10 @@ def run_comparison(data_dir="data", symbol="INTC", qtable_path=None, n_seeds=30,
     The DDPM-100 arm deliberately runs the FIRST policy only: that comparison is about
     the sampler, not the policy, so running the whole family there would multiply the
     slowest arm's cost for no extra information."""
+    # Derived from eval_seed so it is identical across policies, arms and world modes:
+    # seed i means the same market everywhere it is run. Offset to keep it distinct from
+    # the RandomState that drew the seed list itself.
+    episode_seed_base = eval_seed * 1000 + 1
     arm_budget = max_hours_per_arm * 3600.0 if max_hours_per_arm else None
     seeds = generate_held_out_seeds(data_dir, symbol, n_seeds, seed=eval_seed, side=side)
     logger = JsonlLogger(out_path)
@@ -154,7 +173,8 @@ def run_comparison(data_dir="data", symbol="INTC", qtable_path=None, n_seeds=30,
     dn_wallclock = 0.0
     for name, policy in policies.items():
         shortfalls, used, _ = evaluate_policy(env_dn, policy, seeds, logger,
-                                               "eval_depth_noise", name, wall_clock_budget=arm_budget)
+                                               "eval_depth_noise", name, wall_clock_budget=arm_budget,
+                                               episode_seed_base=episode_seed_base)
         results[f"depth_noise/{name}"] = _stats(shortfalls)
         dn_wallclock = max(dn_wallclock, used)
 
@@ -177,7 +197,7 @@ def run_comparison(data_dir="data", symbol="INTC", qtable_path=None, n_seeds=30,
     ref_name = next(iter(policies))
     ddpm_shortfalls, _, n_ddpm = evaluate_policy(
         env_ddpm, policies[ref_name], seeds, logger, "eval_ddpm100", ref_name,
-        wall_clock_budget=dn_wallclock)
+        wall_clock_budget=dn_wallclock, episode_seed_base=episode_seed_base)
     results[f"ddpm100/{ref_name}"] = _stats(ddpm_shortfalls)
     results[f"ddpm100/{ref_name}"]["n_episodes_in_budget"] = n_ddpm
 
