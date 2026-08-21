@@ -169,3 +169,43 @@ def test_run_comparison_derives_the_seed_base_from_eval_seed():
     src = inspect.getsource(run_comparison)
     assert "episode_seed_base = eval_seed" in src, "must be stable across arms, not ad hoc"
     assert src.count("episode_seed_base=episode_seed_base") >= 2, "both arms must use it"
+
+
+def test_horizon_truncates_the_stream_to_the_kernel_window():
+    """Unbounded, the stream runs to end of day (631,710 messages on a real midday t0)
+    while the kernel consumes ~12,000. Every reset paid for the rest."""
+    rows = [[T0 + t, 1, 100 + t, 100, 340000, -1] for t in range(0, 1000, 10)]
+    msgs = _messages(rows)
+    full = build_replay_stream(msgs, T0, seeded_order_ids=[])
+    bounded = build_replay_stream(msgs, T0, seeded_order_ids=[], horizon_seconds=360)
+    assert len(full) == 100
+    assert len(bounded) == 37, "inclusive of t0+360"
+    assert (np.cumsum(bounded[:, 0]) <= 360).all()
+
+
+def test_horizon_none_keeps_the_whole_day():
+    rows = [[T0 + t, 1, 100 + t, 100, 340000, -1] for t in range(0, 1000, 10)]
+    assert len(build_replay_stream(_messages(rows), T0, [], horizon_seconds=None)) == 100
+
+
+def test_replay_reports_execution_rate_from_event_types():
+    """execution_rate is the realism comparison the arm exists for: the generative market
+    fills at 17-18% against a real 4-6%. In replay nothing decodes, so it must come from
+    the stream's own event types or it logs as None and the comparison disappears."""
+    import inspect
+    from rl_execution.env import ExecutionEnv
+    from rl_execution.replay_world_agent import ReplayWorldAgent
+
+    src = inspect.getsource(ExecutionEnv._collect_world_agent_diagnostics)
+    assert "counts.get(4, 0) / placed" in src, "executions per new order"
+    assert "if n_exec:" in src, "generative path must be preferred and unchanged"
+
+    rec = inspect.getsource(ReplayWorldAgent._record_flow)
+    assert "self.decoded_type_counts[et] += 1" in rec
+    assert "_exec_outcomes" not in rec.split('"""')[2], "must not feed the capped deque"
+
+
+def test_flow_counters_are_updated_as_the_stream_is_walked():
+    import inspect
+    from rl_execution.replay_world_agent import ReplayWorldAgent
+    assert "self._record_flow(order[1])" in inspect.getsource(ReplayWorldAgent.wakeup)

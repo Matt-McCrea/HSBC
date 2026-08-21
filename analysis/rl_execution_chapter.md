@@ -343,8 +343,10 @@ the precision of the shortfall estimate achievable per unit of computation.
 Because the background market is generated rather than observed, the following are recorded
 per episode and reported alongside results:
 
-- **Execution rate** — the fraction of generated orders that execute, against a real
-  benchmark of 4–6% for this symbol. Deviations indicate over- or under-trading.
+- **Execution rate** — the fraction of orders that execute, measured identically in both
+  arms (executions per new order) so the simulated market is compared against the real
+  one directly rather than against a published figure. Deviations indicate over- or
+  under-trading.
 - **Unique mid-price count** — a low count indicates a market whose price fails to respond.
 - **Conditioning z-scores** — per-channel min/mean/max, detecting out-of-distribution
   conditioning where the generative model is not trustworthy.
@@ -407,10 +409,19 @@ frontier is not the correct optimum in this simulator, and a single-sided liquid
 flattered or penalised for reasons unrelated to execution skill. This is reported as a
 property of the world agent, not corrected away.
 
-**The simulated market over-executes by roughly threefold.** Execution rate is 17–18%
-against a real benchmark of 4–6% for this symbol. A generated order is about three times
-more likely to execute than a real one, so measured shortfall is optimistic relative to
-live trading: fills that a real book would not have provided are provided here.
+**The simulated market over-executes by roughly twofold.** Execution rate is 17–18% in
+the generative arm. Measured directly on the real INTC stream over the same episode
+window — executions per new order, the same quantity — it is **8.5%**. A generated order
+is therefore about twice as likely to execute as a real one, so measured shortfall is
+optimistic relative to live trading: fills that a real book would not have provided are
+provided here.
+
+The 4–6% figure quoted for this symbol elsewhere in the literature is not the comparison
+used here. It is not measured on this window with this definition, and the like-for-like
+number is the one above; against 4–6% the gap would look nearer threefold, which would
+overstate it. One caveat on the definition: LOBSTER event type 4 marks each visible
+execution, so an order filling in several parts contributes more than once, and the real
+rate is a mild upper bound on the fraction of orders that execute at all.
 
 $\hat\epsilon$ is negative in both logs, which cannot hold for pure liquidity taking — a
 fill cannot beat the mid at zero size. It is the signature of an action space that also
@@ -531,8 +542,9 @@ available compute on the policy frontier instead. No sampler claim is made from 
   the market *situation* (day, $t_0$, side, $Q$) but not the realised path. Identical
   policies score slightly differently across runs (TWAP 0.026 vs 0.048 bps), which bounds
   the residual noise.
-- **Execution rate is ~3$\times$ the real benchmark**, so shortfall measured here is
-  optimistic relative to live trading.
+- **Execution rate is ~2$\times$ the real market's**, measured like-for-like on the same
+  window (17-18% generative vs 8.5% real), so shortfall measured here is optimistic
+  relative to live trading.
 - **Drift violates the martingale assumption**, so divergence from the analytic AC frontier
   is informative about the simulator rather than evidence against the agent. This is a
   *comparison*, not a validation.

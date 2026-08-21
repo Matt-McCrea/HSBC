@@ -224,7 +224,9 @@ class ExecutionEnv:
             random_state=np.random.RandomState(seed=self.rng.randint(0, 2**31)))
 
         if self.world_mode == "replay":
-            stream = build_replay_stream(messages, t0, cs.resting_orders.keys())
+            # Bounded by the kernel's own stop time: anything later is never replayed.
+            stream = build_replay_stream(messages, t0, cs.resting_orders.keys(),
+                                          horizon_seconds=EPISODE_SECONDS + 60)
             print(f"[ExecutionEnv] replay stream: {len(stream)} real messages from t0")
             world_agent = ReplayWorldAgent(
                 id=WORLD_AGENT_ID, name="REPLAY_WORLD_AGENT", type="WorldAgent",
@@ -341,7 +343,16 @@ class ExecutionEnv:
         flow_mix = {k: v / total for k, v in counts.items()} if total else {}
 
         n_exec = len(wa._exec_outcomes)
-        execution_rate = (sum(wa._exec_outcomes) / n_exec) if n_exec else None
+        if n_exec:
+            execution_rate = sum(wa._exec_outcomes) / n_exec
+        else:
+            # Replay: nothing decodes, so _exec_outcomes stays empty and this would log
+            # None -- dropping the very comparison the replay arm exists to make, since
+            # the generative market's 17-18% execution rate only means something against
+            # the real market's. Executions per new order is the same quantity, and in a
+            # LOBSTER stream it is definitional rather than estimated.
+            placed = counts.get(1, 0)
+            execution_rate = (counts.get(4, 0) / placed) if placed else None
 
         mids = set()
         for snap in wa.lob_snapshots:

@@ -48,14 +48,24 @@ from rl_execution.rl_world_agent import fresh_order_id_pool
 NON_BOOK_EVENTS = (5, 6, 7)
 
 
-def build_replay_stream(messages: pd.DataFrame, t0: float, seeded_order_ids):
+def build_replay_stream(messages: pd.DataFrame, t0: float, seeded_order_ids,
+                         horizon_seconds=None):
     """Messages to replay from t0 onward, with inter-arrival gaps.
 
     Returns an array of [gap_seconds, event_type, order_id, size, price, direction],
     the layout WorldAgent.placeOrder expects, where gap_seconds is the delay from the
     previous replayed message (first entry 0).
+
+    horizon_seconds bounds the window. Without it the stream runs to the end of the
+    trading day -- 631,710 messages on a midday t0 -- when the kernel stops after
+    EPISODE_SECONDS + 60 and consumes only ~12,000 of them. The rest is built, held and
+    thrown away on every reset. That is tolerable for a handful of evaluation episodes
+    and not for a training run of several thousand, which replay's ~5s episodes now make
+    affordable. Pass the kernel's own window; None keeps the whole day.
     """
     window = messages[(messages["time"] >= t0) & (~messages["event_type"].isin(NON_BOOK_EVENTS))]
+    if horizon_seconds is not None:
+        window = window[window["time"] <= t0 + float(horizon_seconds)]
     if window.empty:
         return np.zeros((0, 6))
 
@@ -108,6 +118,29 @@ class ReplayWorldAgent(WorldAgent):
             anchor_row[0, 2] = self._seed_price_anchor
         return np.zeros((0, 6)), anchor_row
 
+    def _record_flow(self, event_type):
+        """Populate the same realism counters the generative agent fills during decoding.
+
+        ExecutionEnv._collect_world_agent_diagnostics reads decoded_type_counts and
+        _exec_outcomes to report flow mix and execution rate. Nothing decodes in replay,
+        so without this both come back empty and execution_rate logs as None -- which
+        silently removes the comparison the whole arm exists to make, since the
+        generative market's 17-18% execution rate is only damning against the real 4-6%.
+
+        Here the numbers are definitional rather than estimated: an event_type 4 in the
+        LOBSTER stream IS an execution, so the ratio of type-4 to type-1 events over the
+        replayed window is the real market's execution rate, measured not inferred.
+
+        Deliberately does NOT feed _exec_outcomes. That is a deque(maxlen=1000) holding
+        one flag per order the generative agent placed, so appending both placements and
+        executions to it would compute executions/(placements+executions) over only the
+        last thousand events -- a different quantity from the generative arm's, silently
+        not comparable with it. The env derives the rate from these counts instead.
+        """
+        et = int(event_type)
+        if et in self.decoded_type_counts:
+            self.decoded_type_counts[et] += 1
+
     def wakeup(self, currentTime):
         self.currentTime = currentTime
         if self.first_wakeup:
@@ -120,6 +153,7 @@ class ReplayWorldAgent(WorldAgent):
             return  # stream exhausted; the episode simply runs out of real flow
         order = self.historical_orders[self.next_historical_orders_index]
         self.last_offset_time = order[0]
+        self._record_flow(order[1])
         self.placeOrder(currentTime, order)
         self.next_historical_orders_index += 1
         if self.next_historical_orders_index < len(self.historical_orders):
