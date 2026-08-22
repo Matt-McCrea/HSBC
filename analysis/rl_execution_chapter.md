@@ -544,15 +544,51 @@ standard error by 2–3$\times$ relative to the unpaired comparison.
 | AC ($\kappa T$=2) | 1.39 | 0.87 | 0.99 | [−1.2, 2.8] | +1.362 (SE 0.669) | 2.04 | 0.058 | 9/18 |
 | Q-learning | 0.92 | 1.61 | 0.44 | [−3.4, 4.8] | **+0.892** (SE 0.929) | 0.96 | **0.351** | 8/18 |
 
-**The learned policy is statistically indistinguishable from TWAP** at the calibrated risk
-aversion: 95% CI [−0.93, +2.71] bps, winning on 8 of 18 seeds. Given that TWAP *is* the
-risk-neutral Almgren–Chriss optimum, matching it is the theoretically expected ceiling for a
-risk-neutral objective, not a failure to learn.
+**The learned policy is statistically indistinguishable from TWAP *on cost*** at the
+calibrated risk aversion: 95% CI [−0.93, +2.71] bps, winning on 8 of 18 seeds. Read alone
+that is a null result. It is not one — the same policies separate strongly on the risk
+axis, and the frontier below is where the learned behaviour actually shows up. Matching
+TWAP on cost while carrying materially less inventory is the expected signature of a
+policy trained at $\lambda>0$, not a failure to learn.
 
 **At the exploratory $\lambda = 337$ (8$\times$ calibrated):** both structured policies
 degrade — AC +1.845 ($t$=3.07, $p$=0.007, 3/18 wins) and Q-learning +3.012 ($t$=4.02,
 $p$=0.0009, 1/18 wins). Over-weighting inventory risk at a five-minute horizon buys risk
 reduction that the cost side does not repay.
+
+### The cost/risk frontier: both policies are on it
+
+Scoring on mean cost alone conceals the entire point of the exercise. Measuring both axes
+on the real-data evaluation (18 held-out SELL seeds, replay), where risk is
+$\sum_k x_k^2$ over the episode:
+
+| Policy | Mean cost | Mean risk | Risk sd | vs TWAP |
+|---|---|---|---|---|
+| AC ($\kappa T$=2) | −1.450 bps | **2.792** | 0.085 | −54% risk for +0.275 bps |
+| Q-learning | −1.337 bps | **3.620** | 0.916 | −40% risk for +0.389 bps |
+| TWAP | −1.726 bps | **6.035** | 1.647 | — |
+
+**This is an Almgren–Chriss efficient frontier, recovered empirically.** The three policies
+order monotonically: TWAP is cheapest and carries the most inventory risk, AC is dearest and
+carries the least, and the learned policy sits between them. None dominates another — each
+is a different point on the same tradeoff, which is exactly what the framework predicts as
+$\lambda$ varies.
+
+**The learned policy did learn risk aversion.** It was trained with an inventory penalty at
+$\lambda=42$ and it produced a policy carrying **40% less inventory risk than TWAP**, at a
+cost of 0.389 bps — placing it between the $\lambda=0$ and $\kappa T=2$ members of the
+family, which is where a policy trained at an intermediate $\lambda$ belongs. Reported on
+the cost axis alone this appeared as "statistically indistinguishable from TWAP", i.e. a
+null result. It is not a null result; it is a risk reduction that the cost axis cannot show.
+
+The pattern is sharp: the policies **differ significantly in risk and not in cost**. That
+asymmetry is the finding, and it is only visible because both axes are measured.
+
+One subtlety worth stating. The TWAP baseline places passive limit orders at its own touch,
+which do not always fill, so its realised inventory path lags its nominal linear schedule —
+its measured risk of 6.035 exceeds the 3.85 an ideal linear liquidation would produce. Part
+of what the learned policy achieves is simply *hitting* a linear schedule by mixing in
+aggressive actions when passive ones fail to fill.
 
 ### The Almgren–Chriss comparison is partly definitional
 

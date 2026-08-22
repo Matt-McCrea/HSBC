@@ -153,3 +153,28 @@ def test_report_warns_that_mean_cost_favours_twap_by_construction(tmp_path):
     text, _ = report(load([_frontier_log(tmp_path)]), baseline="twap")
     assert "COST / RISK FRONTIER" in text
     assert "lambda=0 objective" in text
+
+
+def test_risk_axis_gets_the_same_paired_test_as_cost(tmp_path):
+    """The finding this exists for: policies can differ significantly in risk while being
+    indistinguishable in cost. Reporting only the cost test makes that read as a null."""
+    from rl_execution.compare_policies import paired
+    df = load([_frontier_log(tmp_path)])
+    assert "inventory_risk" in df.columns
+    risk = paired(df, baseline="twap", metric="inventory_risk")
+    row = risk[risk["policy"] == "ac_k2"].iloc[0]
+    assert row["mean_diff"] < 0, "front-loading carries less inventory risk"
+    assert row["p"] < 0.001, "and the difference must be testable, not just a mean"
+
+
+def test_report_shows_the_paired_risk_block(tmp_path):
+    text, _ = report(load([_frontier_log(tmp_path)]), baseline="twap")
+    assert "PAIRED RISK vs twap" in text
+
+
+def test_logs_without_trajectories_still_work(tmp_path):
+    """Older logs predate trajectory capture; the frontier should be skipped, not crash."""
+    df = load([_write_log(tmp_path)])
+    assert "inventory_risk" not in df.columns or df["inventory_risk"].isna().all()
+    text, res = report(df, baseline="twap")
+    assert not res.empty

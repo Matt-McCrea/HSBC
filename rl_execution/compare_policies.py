@@ -54,6 +54,14 @@ def load(paths):
     df = pd.DataFrame(rows)
     if "shortfall_bps" not in df.columns or df["shortfall_bps"].isna().all():
         df["shortfall_bps"] = df["shortfall"] / df["p_arrival"] * 10_000.0
+    # Inventory risk as a first-class column, so the same paired machinery applies to the
+    # frontier's other axis. Cost and risk are the two halves of the AC objective and both
+    # deserve a t-test; reporting one with error bars and the other as a bare mean is what
+    # made a risk-averse policy look like a null result.
+    if "trajectory" in df.columns:
+        from rl_execution.qlearning import inventory_risk
+        df["inventory_risk"] = [inventory_risk(t) if t else np.nan
+                                 for t in df["trajectory"]]
     return df
 
 
@@ -170,6 +178,16 @@ def report(df, baseline="twap", metric="shortfall_bps"):
         A("  Mean shortfall alone is the lambda=0 objective, which TWAP optimises by")
         A("  construction, so a front-loaded schedule MUST look worse on that axis. Judge a")
         A("  policy worse only if it loses on both.")
+
+        if "inventory_risk" in df.columns and not df["inventory_risk"].isna().all():
+            risk = paired(df, baseline, "inventory_risk")
+            if not risk.empty:
+                A(f"\n  PAIRED RISK vs {baseline} (negative = carried LESS inventory risk)")
+                for _, r in risk.iterrows():
+                    star = ("***" if r["p"] < 0.001 else "**" if r["p"] < 0.01
+                            else "*" if r["p"] < 0.05 else "")
+                    A(f"    {r['policy']:<14} diff={r['mean_diff']:>+8.3f}  "
+                      f"stderr={r['stderr']:>6.3f}  t={r['t']:>+6.2f}  p={r['p']:.4f}{star}")
 
     A("\nREADING THIS")
     sig = res[res["p"] < 0.05]
