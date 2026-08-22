@@ -1,5 +1,5 @@
 #!/bin/bash
-# exec_bracket.sh — pin the execution rate to real (~7%) on the reanchored checkpoint.
+# exec_bracket.sh — pin the execution rate to THIS ticker's real rate by bracketing depth-noise sigma.
 #
 # WHY: the sweep bracketed exec ABOVE real everywhere (sigma 0.2 -> 9.6%, 0.3 -> 12.2%). The
 # marketable fraction scales with the decode-time depth-noise sigma, so lower sigma lowers exec.
@@ -122,12 +122,30 @@ for block in re.split(r'^## ', text, flags=re.M)[1:]:
     rows.append((tag, lim[-1] if lim else '-', can[-1] if can else '-',
                  execs[-1] if execs else '-', mids[-1] if mids else '-',
                  b, bid[-1] if bid else '-', ask[-1] if ask else '-'))
+# REAL row parsed from THIS run's own real reference. Previously hardcoded to INTC's
+# 49.2/43.8/7.0/69/3899/2117, which silently made every non-INTC bracket meaningless.
+real_row = None
+rb = re.search(r'=== REAL[^=]*===(.*?)(?:=== |\Z)', text, re.S)
+if rb:
+    rt = rb.group(1)
+    rl = re.findall(r'LIMIT_ORDER\s+([\d.]+)', rt); rc = re.findall(r'ORDER_CANCELLED\s+([\d.]+)', rt)
+    re_ = re.findall(r'ORDER_EXECUTED\s+([\d.]+)', rt); rm = re.findall(r'unique mid-prices:\s*(\d+)', rt)
+    rbd = re.findall(r'bid_size_1:.*mean=(\d+)', rt); rak = re.findall(r'ask_size_1:.*mean=(\d+)', rt)
+    if rl:
+        real_row = (rl[-1], rc[-1] if rc else '-', re_[-1] if re_ else '-',
+                    rm[-1] if rm else '-', rbd[-1] if rbd else '-', rak[-1] if rak else '-')
 hdr = f"{'cell':<26}{'Lim%':>6}{'Can%':>6}{'Exec%':>7}{'mids':>6}{'B':>7}{'bid1':>8}{'ask1':>8}"
-line = "\n".join([hdr, '-'*len(hdr),
-                  f"{'REAL':<26}{'49.2':>6}{'43.8':>6}{'7.0':>7}{'69':>6}{'-':>7}{'3899':>8}{'2117':>8}"] +
+if real_row:
+    rl_, rc_, re2, rm_, rbd_, rak_ = real_row
+    real_line = f"{'REAL':<26}{rl_:>6}{rc_:>6}{re2:>7}{rm_:>6}{'-':>7}{rbd_:>8}{rak_:>8}"
+    target = f"target exec={re2}%, mids={rm_}"
+else:
+    real_line = f"{'REAL':<26}{'?':>6}{'?':>6}{'?':>7}{'?':>6}{'-':>7}{'?':>8}{'?':>8}"
+    target = "NO REAL REFERENCE FOUND -- pass --real <matched real csv>; do NOT use INTC's numbers"
+line = "\n".join([hdr, '-'*len(hdr), real_line] +
                  [f"{t:<26}{l:>6}{c:>6}{e:>7}{m:>6}{b:>7}{bd:>8}{ak:>8}" for t,l,c,e,m,b,bd,ak in rows])
-print("\n==== EXEC BRACKET (target exec=7.0%, mids=69) ====\n"+line)
+print(f"\n==== EXEC BRACKET ({target}) ====\n"+line)
 open(sys.argv[1],'w').write("# TABLE\n```\n"+line+"\n```\n\n"+text)
 PY
 echo ""; echo "Done. Summary: $SUM"
-echo "READ: which sigma lands exec closest to 7.0% — that's your headline 30-min config."
+echo "READ: which sigma lands exec closest to the REAL row above (this ticker's own rate)."
