@@ -120,3 +120,36 @@ def test_small_paired_samples_are_flagged(tmp_path):
 def test_no_caution_when_the_sample_is_adequate(tmp_path):
     text, _ = report(load([_mixed_log(tmp_path, 18)]), baseline="twap")
     assert "CAUTION" not in text
+
+
+def _frontier_log(tmp_path):
+    """TWAP-like (slow, cheap) vs front-loaded (fast, dearer) -- the AC tradeoff. On mean
+    cost alone the front-loaded policy loses by construction, which is exactly the reading
+    the frontier exists to prevent."""
+    path = tmp_path / "frontier.jsonl"
+    with open(path, "w") as f:
+        for i in range(12):
+            for name, inv, bps in (("twap", [1.0, .8, .6, .4, .2], 0.0),
+                                   ("ac_k2", [1.0, .5, .25, .1, .0], 1.5)):
+                f.write(json.dumps({
+                    "seed_day": "2015-01-05", "t0": 40000.0 + i, "side": "SELL", "Q": 2000,
+                    "policy_name": name, "p_arrival": P_ARRIVAL,
+                    "shortfall": bps / 10_000.0 * P_ARRIVAL, "shortfall_bps": bps,
+                    "trajectory": [{"inv_rem": v} for v in inv],
+                }) + "\n")
+    return str(path)
+
+
+def test_frontier_separates_cost_from_risk(tmp_path):
+    from rl_execution.compare_policies import frontier
+    fr = frontier(load([_frontier_log(tmp_path)]))
+    ac = fr[fr["policy"] == "ac_k2"].iloc[0]
+    twap = fr[fr["policy"] == "twap"].iloc[0]
+    assert ac["mean_cost_bps"] > twap["mean_cost_bps"], "front-loading costs more"
+    assert ac["mean_risk"] < twap["mean_risk"], "and carries less inventory risk"
+
+
+def test_report_warns_that_mean_cost_favours_twap_by_construction(tmp_path):
+    text, _ = report(load([_frontier_log(tmp_path)]), baseline="twap")
+    assert "COST / RISK FRONTIER" in text
+    assert "lambda=0 objective" in text

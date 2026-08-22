@@ -104,6 +104,32 @@ def paired(df, baseline="twap", metric="shortfall_bps"):
     return pd.DataFrame(out).sort_values("mean_diff") if out else pd.DataFrame()
 
 
+def frontier(df):
+    """Mean cost against mean inventory risk, per policy -- the Almgren-Chriss frontier.
+
+    Why this is not optional. Mean shortfall IS the lambda=0 objective, and TWAP is the
+    lambda=0 optimum of the AC family, so an AC schedule at kappa*T=2 must score worse on
+    mean cost than TWAP by construction. Reporting that alone reads as evidence against
+    AC when it is really a statement about which objective was measured. AC buys reduced
+    exposure to price moves, which shows up as sum x_t^2 -- how slowly inventory was drawn
+    down -- and is invisible on the cost axis.
+
+    A policy is only genuinely worse if it loses on BOTH axes.
+    """
+    from rl_execution.qlearning import inventory_risk
+    rows = []
+    for name, grp in df.groupby("policy_name"):
+        risks = [inventory_risk(t) for t in grp.get("trajectory", []) if t]
+        if not risks:
+            continue
+        cost = grp["shortfall_bps"].dropna()
+        rows.append({"policy": name, "n": len(risks),
+                     "mean_cost_bps": float(cost.mean()),
+                     "mean_risk": float(np.mean(risks)),
+                     "risk_sd": float(np.std(risks, ddof=1)) if len(risks) > 1 else 0.0})
+    return pd.DataFrame(rows).sort_values("mean_risk") if rows else pd.DataFrame()
+
+
 def report(df, baseline="twap", metric="shortfall_bps"):
     lines = []
     A = lines.append
@@ -132,6 +158,18 @@ def report(df, baseline="twap", metric="shortfall_bps"):
           f"beat baseline on {int(r['wins'])}/{int(r['n'])} seeds")
         A(f"  {'':<14} pairing shrank the stderr {r['variance_reduction']:.1f}x "
           f"(unpaired would be {r['se_unpaired']:.3f})")
+
+    fr = frontier(df)
+    if not fr.empty and len(fr) > 1:
+        A("\nCOST / RISK FRONTIER   mean shortfall vs mean inventory risk (sum x_t^2)")
+        A(f"  {'policy':<14} {'n':>5} {'mean cost':>12} {'mean risk':>11} {'risk sd':>9}")
+        for _, r in fr.iterrows():
+            A(f"  {r['policy']:<14} {int(r['n']):>5} {r['mean_cost_bps']:>9.3f} bps "
+              f"{r['mean_risk']:>11.3f} {r['risk_sd']:>9.3f}")
+        A("  Lower risk = inventory drawn down faster = less exposure to price moves.")
+        A("  Mean shortfall alone is the lambda=0 objective, which TWAP optimises by")
+        A("  construction, so a front-loaded schedule MUST look worse on that axis. Judge a")
+        A("  policy worse only if it loses on both.")
 
     A("\nREADING THIS")
     sig = res[res["p"] < 0.05]

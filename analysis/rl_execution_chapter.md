@@ -7,8 +7,9 @@
 > and the full bibliographic details should be checked before submission.
 >
 > **Section 3 is now measured, not a skeleton.** Every number in it comes from
-> `logs/train_session.jsonl` (114 episodes), `logs/eval_frontier_*.jsonl` (54 generative
-> episodes) or `logs/eval_replay_sell.jsonl` (54 real-data episodes),
+> `logs/train_session.jsonl` (114 generative episodes), `logs/eval_frontier_*.jsonl` (54
+> generative), `logs/eval_replay_*.jsonl` (54 real-data) or `logs/train_replay.jsonl`
+> (3,939 real-data episodes, 28,871 fills — the sample that settles §3.6),
 > reproducible with `analyze_logs`, `calibrate`, `impact`, `inspect_policy` and
 > `compare_policies`. The one section deliberately left empty is §3.7, the sampler
 > comparison, which was not run.
@@ -453,7 +454,7 @@ Both columns below are 54 episodes, measured by the same code:
 | Unique mid prices | 8.94 | **4.50** | simulator's price moves about twice as much |
 | Temporary impact $\hat\eta$ | 4.751 ($t$=7.86) | **1.894 ($t$=9.14)** | simulator's impact ~2.5$\times$ too strong |
 | $\hat\sigma$ (per 30 s) | 155.6 | **166** | volatility is well matched |
-| Permanent impact | undetectable | **undetectable** | agrees |
+| Permanent impact | not resolved ($n$=941) | **0.083, $t$=18.5 ($n$=26k)** | real, and 82% persists — see §3.6 |
 | Implied $\lambda$ | 16.64 | **6.635** | follows $\hat\sigma^2/\hat\eta$ |
 
 **The martingale result is the important one.** Almgren–Chriss assumes a driftless
@@ -553,33 +554,76 @@ degrade — AC +1.845 ($t$=3.07, $p$=0.007, 3/18 wins) and Q-learning +3.012 ($t
 $p$=0.0009, 1/18 wins). Over-weighting inventory risk at a five-minute horizon buys risk
 reduction that the cost side does not repay.
 
-The AC schedule underperforms TWAP at every $\lambda$ tested. Section 3.5 explains why this
-is consistent with the measured impact structure rather than a defect of the baseline.
+### The Almgren–Chriss comparison is partly definitional
+
+The AC schedule scores worse than TWAP on mean shortfall at every $\lambda$ tested. That
+must be read carefully, because **mean shortfall is the $\lambda=0$ objective and TWAP is
+its optimum**. A schedule constructed at $\kappa T = 2$ is optimising
+$\mathbb{E}[C] + \lambda\mathbb{V}[C]$ for $\lambda > 0$, and is then being scored on
+$\mathbb{E}[C]$ alone — the one criterion under which it cannot win. Its loss on that axis
+is close to arithmetic, not evidence against the framework.
+
+What AC buys is on the other axis: reduced exposure to price moves while inventory is still
+held, which appears as $\sum_k x_k^2$, the variance term itself. `compare_policies` now
+reports both, and a policy should be judged worse only if it loses on **both**. Reporting a
+single mean and calling the front-loaded schedule inferior is the error this frontier
+exists to prevent.
+
+The same caution applies in reverse to the learned policy. It was trained with an inventory
+penalty at $\lambda = 42$, so it too is optimising a risk-adjusted objective while being
+scored on a risk-neutral one. Indistinguishability from TWAP on mean cost is therefore
+consistent with it having bought some risk reduction that the cost axis does not show.
 
 ## 3.6 Market impact of the agent's own orders
 
-| Quantity | Train | Eval | Verdict |
+Three samples, of very different size. The third — 3,939 replay training episodes,
+**28,871 fills** — is what settles the permanent-impact question, and it reverses the
+answer the two small samples gave.
+
+| Quantity | Generative train (1,004) | Generative eval (488) | **Replay train (28,871)** |
 |---|---|---|---|
-| Temporary impact $\hat\eta$ | 6.554 ($t$=15.69) | 4.751 ($t$=7.86) | **significant in both** |
-| Permanent $\hat\gamma$, $h$=1 (30 s) | 0.0248 ($t$=0.94) | −0.0190 ($t$=−0.70) | not detectable |
-| Permanent $\hat\gamma$, $h$=2 (60 s) | 0.0352 ($t$=1.15) | −0.0237 ($t$=−0.69) | not detectable |
-| Permanent $\hat\gamma$, $h$=3 (90 s) | 0.0324 ($t$=0.96) | −0.0332 ($t$=−0.90) | not detectable |
-| Permanent $\hat\gamma$, $h$=5 (150 s) | 0.0244 ($t$=0.55) | 0.0199 ($t$=0.43) | not detectable |
+| Temporary $\hat\eta$ | 6.554 ($t$=15.69) | 4.751 ($t$=7.86) | **2.433 ($t$=85.45)** |
+| Permanent $\hat\gamma$, $h$=1 (30 s) | 0.0248 ($t$=0.94) | −0.0190 ($t$=−0.70) | **0.0828 ($t$=18.53)** |
+| Permanent $\hat\gamma$, $h$=2 (60 s) | 0.0352 ($t$=1.15) | −0.0237 ($t$=−0.69) | **0.0857 ($t$=12.80)** |
+| Permanent $\hat\gamma$, $h$=3 (90 s) | 0.0324 ($t$=0.96) | −0.0332 ($t$=−0.90) | **0.0879 ($t$=10.18)** |
+| Permanent $\hat\gamma$, $h$=5 (150 s) | 0.0244 ($t$=0.55) | 0.0199 ($t$=0.43) | **0.0675 ($t$=5.36)** |
 
-**Temporary impact is strong and permanent impact is undetectable at every horizon out to
-150 s, in both samples.** This is the chapter's most robust quantitative finding, and it
-explains §3.5: Almgren–Chriss front-loading trades spread cost now for reduced exposure to
-price moves later, but if trading leaves no lasting price mark there is little for
-front-loading to avoid, so it pays the cost without earning the benefit.
+**Permanent impact is real, and 82% of it persists to 150 s.** Earlier drafts of this
+chapter reported it as undetectable at every horizon. That conclusion rested on 330–941
+observations; at 28,871 the effect is significant at every horizon with $t$ from 5.4 to
+18.5. The earlier result was **an underpowered sample, not evidence of absence**, and it is
+recorded here as a correction rather than quietly dropped — the $R^2$ is small (0.013 at
+$h$=1), so this is a modest effect that simply needed the observations to resolve.
 
-**No claim is made about the functional form of impact.** Linear and square-root fits are
-statistically indistinguishable — linear leads by $R^2$ 0.0030 on train, square-root by
-0.0047 on eval, i.e. the nominal winner flips between samples. Over the size range a single
-parent order spans, the two forms are near-collinear and this data cannot separate them.
+One caveat specific to how it was measured. These are replay episodes, in which the
+background flow is fixed and cannot respond. That cuts both ways, and not in the same
+direction for the two halves of the decomposition: replay **understates temporary** impact,
+because no participant reacts adversely to our order and our fills are correspondingly
+better than reality; but it **overstates persistence**, because our market orders deplete
+real resting liquidity and nothing replenishes it, so a move we cause stays put where a
+real book would have refilled. The true permanent impact is therefore below this estimate
+and above zero.
 
-Permanent impact here is the price response *associated* with trading, not a causally
-isolated effect, because the world agent reacts to the book being perturbed. A clean
-estimate requires paired counterfactual episodes with the agent disabled.
+**On real data the square-root law is identifiable.** Square-root beats linear by $R^2$
+0.2254 vs 0.2019, a gap of 0.024 at $n$=28,871. In the generative arm the same comparison
+gave gaps of 0.003–0.005 with the winner flipping between samples, so no claim was possible
+there. Over the size range a single parent order spans the two forms are near-collinear,
+which is why separating them needed a sample this large.
+
+### Why this does not explain the Almgren–Chriss result
+
+An earlier draft argued that AC front-loading loses to TWAP *because* trading leaves no
+lasting price mark, so there is nothing for front-loading to avoid. With permanent impact
+now established, that argument fails — and it was the wrong argument regardless.
+
+In AC's linear model the permanent-impact term contributes $\tfrac{1}{2}\gamma X^2$ to
+expected cost **independently of the trajectory**: liquidating $X$ shares moves the price by
+the same total amount however the trade is spread out. Permanent impact therefore does not
+enter the optimal schedule at all, which depends only on $\tilde\eta$ and $\sigma^2$
+through $\kappa=\sqrt{\lambda\sigma^2/\tilde\eta}$. It can neither favour nor disfavour
+front-loading.
+
+The real explanation is measurement, not microstructure, and is set out in §3.5.
 
 ## 3.7 Sampler comparison
 
