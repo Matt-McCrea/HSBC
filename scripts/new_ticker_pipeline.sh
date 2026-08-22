@@ -234,7 +234,8 @@ triage)
   [[ -n "$DAYS" ]] || { echo "!! no triage days — run --phase setup"; exit 1; }
   say "triage over ALL checkpoints, $TRIAGE_DAYS-day spread: $DAYS"
   say "abandon-on-first-failure: a checkpoint that fails ANY day is not the generalising one"
-  bash scripts/adaptive_ckpt_search.sh --days "$DAYS" --cap-secs "$CAP_SECS" \
+  bash scripts/adaptive_ckpt_search.sh --ticker "$TICKER" --st "$ST" --et "$ET" --seed "$SEED" \
+      --days "$DAYS" --cap-secs "$CAP_SECS" \
       --out-tag "${TICKER}_triage" 2>&1 | tee "$RUN_DIR/logs/triage.log"
   mark_done triage
   say "survivors -> ckpt_search/latest-${TICKER}_triage/progress.txt"
@@ -265,7 +266,8 @@ stability)
   [[ -n "$DAYS" ]] || { echo "!! no day list — run --phase setup"; exit 1; }
   say "full-period stability, $(wc -w <<< "$DAYS") days, survivors only"
   say "NOTE: edit BASE in adaptive_ckpt_search.sh to the sigma chosen in the sigma phase"
-  bash scripts/adaptive_ckpt_search.sh --days "$DAYS" --cap-secs "$CAP_SECS" \
+  bash scripts/adaptive_ckpt_search.sh --ticker "$TICKER" --st "$ST" --et "$ET" --seed "$SEED" \
+      --days "$DAYS" --cap-secs "$CAP_SECS" \
       --out-tag "${TICKER}_stability" --no-abandon 2>&1 | tee "$RUN_DIR/logs/stability.log"
   mark_done stability
   ;;

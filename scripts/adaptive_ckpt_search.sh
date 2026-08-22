@@ -26,7 +26,9 @@
 set -uo pipefail
 
 CKPT_DIR="data/checkpoints/TRADES"
-TICKER="INTC"; ST="09:30:00"; ET="10:00:00"; SEED="30"
+# TICKER defaults to INTC for backwards compatibility, but falls back to the TICKER env var when set
+# so the cross-ticker pipeline does not have to pass it explicitly at every call site.
+TICKER="${TICKER:-INTC}"; ST="09:30:00"; ET="10:00:00"; SEED="30"
 BASE="--depth-noise 0.3 --size-reshape --type-decode prior"
 CAP_SECS=2400   # 40 min per-day cap
 CKPTS_ARG=""    # space-separated substrings to match against ckpt filenames, in priority order
@@ -41,6 +43,8 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --days) DAYS_ARG="$2"; shift 2;;
   --out-tag) OUT_TAG="$2"; shift 2;;
   --deadline) DEADLINE="$2"; shift 2;;
+  --ticker) TICKER="$2"; shift 2;;
+  --st) ST="$2"; shift 2;; --et) ET="$2"; shift 2;; --seed) SEED="$2"; shift 2;;
   --no-abandon) ABANDON=0; shift;;
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
 
@@ -136,7 +140,8 @@ write_status "starting"
 WINNER=""
 for CKNAME in "${PRIORITY_CKPTS[@]}"; do
   CK="$CKPT_DIR/$CKNAME"
-  TAG=$(echo "$CKNAME" | sed -E 's/^val_ema=//; s/_INTC.*//')
+  # strip the ticker-and-architecture tail generically (…_TSLA_se_256_… as well as …_INTC_…)
+  TAG=$(echo "$CKNAME" | sed -E 's/^val_ema=//; s/_[A-Z]{1,6}_se_.*//; s/\.ckpt$//')
   if [[ ! -f "$CK" ]]; then
     echo "!! missing $CK, skipping" | tee -a "$PROGRESS"; continue
   fi
