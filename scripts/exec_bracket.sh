@@ -23,6 +23,7 @@ TICKER="INTC"; DATE="20150130"; ST="09:30:00"; ET="10:00:00"; SEED="30"
 CKPT_DIR="data/checkpoints/TRADES"; ID=""; CKPT_PATH=""
 SIGMAS="0.10 0.125 0.15"                         # override with --sigmas "0.16 0.17 0.18"
 REAL=""                                          # derived from ticker/date/window below
+EXTRA_FLAGS=""                                   # extra decode flags appended to every cell
 OUT_DIR="exec_bracket/$(date +%Y%m%d_%H%M%S)"
 while [[ $# -gt 0 ]]; do case "$1" in
   --id) ID="$2"; shift 2;; --out-dir) OUT_DIR="$2"; shift 2;;
@@ -33,6 +34,7 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --seed) SEED="$2"; shift 2;;
   --ckpt-path) CKPT_PATH="$2"; shift 2;;         # exact file, bypasses -id val_ema matching
   --real) REAL="$2"; shift 2;;
+  --extra) EXTRA_FLAGS="$2"; shift 2;;            # appended to every cell, e.g. --type-prior L,C,M
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
 
 # Real replay path follows market_replay_{TICKER}_{YYYY-MM-DD}_{ET with : -> -}_{SEED}.
@@ -98,7 +100,7 @@ run () { # run <tag> <extra>
 
 # One cell per sigma in $SIGMAS (default brackets below 0.2; pass --sigmas to re-target).
 for s in $SIGMAS; do
-  run "DDIM10_dn${s}_sr_prior" "--depth-noise ${s} --size-reshape --type-decode prior"
+  run "DDIM10_dn${s}_sr_prior" "--depth-noise ${s} --size-reshape --type-decode prior $EXTRA_FLAGS"
 done
 
 # mini table
