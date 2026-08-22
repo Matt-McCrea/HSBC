@@ -31,6 +31,7 @@ TRIAGE_DAYS=6                 # spread-sample triage before spending a full peri
 CAP_SECS=2400                 # 40 min/day — the established "unstable" criterion
 LIMIT_TRAIN_BATCHES="0.15"    # short epochs => more early checkpoints (see run.py)
 SIGMAS="0.15 0.3 0.45"        # first bracket; widen/narrow from the phase's own output
+DEPTH_NOISE="0.3"             # used by `stability`; set from the sigma phase result
 WITH_TRADES_DEFAULT=0
 RUN_DIR=""
 # Interpreter. The remote venv provides `python`; some systems only have `python3`. Override with
@@ -47,6 +48,7 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --cap-secs) CAP_SECS="$2"; shift 2;;
   --limit-train-batches) LIMIT_TRAIN_BATCHES="$2"; shift 2;;
   --sigmas) SIGMAS="$2"; shift 2;;
+  --depth-noise) DEPTH_NOISE="$2"; shift 2;;
   --seed) SEED="$2"; shift 2;;
   --with-trades-default) WITH_TRADES_DEFAULT=1; shift;;
   --dry-run) DRY=1; shift;;
@@ -265,9 +267,9 @@ stability)
   DAYS=$(tr '\n' ' ' < "$RUN_DIR/days.txt" 2>/dev/null)
   [[ -n "$DAYS" ]] || { echo "!! no day list — run --phase setup"; exit 1; }
   say "full-period stability, $(wc -w <<< "$DAYS") days, survivors only"
-  say "NOTE: edit BASE in adaptive_ckpt_search.sh to the sigma chosen in the sigma phase"
+  say "sigma: $DEPTH_NOISE  (set with --depth-noise from the sigma phase; 0.3 is INTC's, not portable)"
   bash scripts/adaptive_ckpt_search.sh --ticker "$TICKER" --st "$ST" --et "$ET" --seed "$SEED" \
-      --days "$DAYS" --cap-secs "$CAP_SECS" \
+      --depth-noise "$DEPTH_NOISE" --days "$DAYS" --cap-secs "$CAP_SECS" \
       --out-tag "${TICKER}_stability" --no-abandon 2>&1 | tee "$RUN_DIR/logs/stability.log"
   mark_done stability
   ;;

@@ -29,7 +29,11 @@ CKPT_DIR="data/checkpoints/TRADES"
 # TICKER defaults to INTC for backwards compatibility, but falls back to the TICKER env var when set
 # so the cross-ticker pipeline does not have to pass it explicitly at every call site.
 TICKER="${TICKER:-INTC}"; ST="09:30:00"; ET="10:00:00"; SEED="30"
-BASE="--depth-noise 0.3 --size-reshape --type-decode prior"
+# sigma=0.3 is INTC's fitted value and is NOT portable — it was bracketed against INTC's execution
+# share and tick size. Use --depth-noise to pass a ticker's own fitted value (from the sigma phase /
+# exec_bracket.sh), or --base to replace the whole decode config.
+DEPTH_NOISE="0.3"
+BASE=""
 CAP_SECS=2400   # 40 min per-day cap
 CKPTS_ARG=""    # space-separated substrings to match against ckpt filenames, in priority order
 DAYS_ARG=""     # space-separated days; empty = full month
@@ -45,8 +49,14 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --deadline) DEADLINE="$2"; shift 2;;
   --ticker) TICKER="$2"; shift 2;;
   --st) ST="$2"; shift 2;; --et) ET="$2"; shift 2;; --seed) SEED="$2"; shift 2;;
+  --depth-noise) DEPTH_NOISE="$2"; shift 2;;
+  --base) BASE="$2"; shift 2;;
   --no-abandon) ABANDON=0; shift;;
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
+
+# Decode config: explicit --base wins, otherwise built from the (possibly overridden) sigma.
+[[ -n "$BASE" ]] || BASE="--depth-noise ${DEPTH_NOISE} --size-reshape --type-decode prior"
+echo "decode config: $BASE"
 
 # --deadline exists because a booked GPU window ends at a wall-clock time, not after N days.
 # Being cut off mid-day loses that day's work AND leaves no summary; stopping before a day we
