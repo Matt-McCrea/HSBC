@@ -142,6 +142,13 @@ parser.add_argument('--fix-time', action='store_true',
 parser.add_argument('--type-decode', type=str, default='l1', choices=['l1', 'l2', 'prior'],
                     help='H2: type-embedding decode: l1 (original), l2, or prior '
                          '(Bayes prior-corrected — penalizes the geometrically oversized MARKET region)')
+parser.add_argument('--type-prior', type=str, default=None, metavar='L,C,M',
+                    help="Real next-event marginals for --type-decode prior, as 'limit,cancel,market'. "
+                         "TICKER-SPECIFIC: the built-in default is INTC's 0.49,0.48,0.03. Using it on "
+                         "another stock pins that stock's market-order rate to Intel's 3%% and no "
+                         "depth-noise sigma can overcome it (TSLA: real 45/38/17, generated stuck at "
+                         "51/45/3 across sigma 0.15-3.0). Read the marginals off that stock's real "
+                         "data, e.g. via evaluation.stylized_custom.lobster_real_reference.")
 parser.add_argument('--fix-cancel-bind', action='store_true',
                     help='H3: bind generated cancels to the nearest same-side resting order instead of '
                          'dropping them when no exact-price match exists')
@@ -382,6 +389,8 @@ if args.diffusion:
                             gen_seq_size=config.HYPER_PARAMETERS[cst.LearningHyperParameter.MASKED_SEQ_SIZE],
                             fix_time=args.fix_time,
                             type_decode=args.type_decode,
+                            type_prior=(tuple(float(x) for x in args.type_prior.split(','))
+                                        if args.type_prior else None),
                             fix_cancel_bind=args.fix_cancel_bind,
                             fix_lob_pad=args.fix_lob_pad,
                             drop_type2_cond=args.drop_type2_cond,

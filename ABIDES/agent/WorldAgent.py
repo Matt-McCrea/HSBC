@@ -35,7 +35,7 @@ class WorldAgent(Agent):
                  depth_temp=1.0, depth_reshape=None, size_reshape=None, depth_noise=0.0,
                  dn_target_exec=0.0, cancel_boost=0.0, depth_drift=0.0, depth_drift_phi=0.995,
                  book_target_thick=0.0, book_cancel_rate=0.5, cond_clip=0.0,
-                 flow_balance=0.0, flow_balance_window=500):
+                 flow_balance=0.0, flow_balance_window=500, type_prior=None):
 
         super().__init__(id, name, type, random_state=random_state, log_to_file=log_orders)
         self.count_neg_size = 0
@@ -167,9 +167,21 @@ class WorldAgent(Agent):
             from utils.utils_data import compute_price_anchor
             self.price_anchor = float(compute_price_anchor(self.historical_lob))
             print(f"[WorldAgent] PRICE_REANCHOR on: day anchor = {self.price_anchor} (raw units)")
-        # log class priors [limit, cancel, market] for the 'prior' decode. Taken from the
-        # real test-set next-event marginals (limit=0.49, cancel=0.48, market=0.03).
-        self._type_log_prior = torch.log(torch.tensor([0.49, 0.48, 0.03], device=cst.DEVICE))
+        # Log class priors [limit, cancel, market] for the 'prior' decode: the REAL next-event
+        # marginals for the stock being simulated.
+        #
+        # TICKER-SPECIFIC — the default below is INTC's. Using it on another stock pins that stock's
+        # market-order rate to Intel's 3%, and no decode-time depth noise can overcome it because the
+        # type decision is independent of depth. Observed on TSLA: real flow 44.9/38.4/16.7, but
+        # generated flow sat at 51/45/3 (i.e. the prior) for every sigma from 0.15 to 3.0.
+        # Pass --type-prior "0.449,0.384,0.167" for TSLA, or that stock's own marginals.
+        _prior = type_prior if type_prior else (0.49, 0.48, 0.03)
+        _prior = tuple(float(x) for x in _prior)
+        if abs(sum(_prior) - 1.0) > 0.02:
+            print(f"[WorldAgent] WARNING: type prior {_prior} sums to {sum(_prior):.3f}, not 1.0")
+        print("[WorldAgent] type prior (limit, cancel, market) = "
+              f"{_prior}{'  <-- INTC default; set --type-prior for another stock' if not type_prior else ''}")
+        self._type_log_prior = torch.log(torch.tensor(_prior, device=cst.DEVICE))
         # ── Diagnostics (always on, cheap counters) ──
         self.decoded_type_counts = {1: 0, 3: 0, 4: 0}  # pre-drop decode histogram (1=limit,3=cancel,4=market)
         self.depth_hist = {"neg": 0, "0": 0, "1-2": 0, "3-5": 0, "6+": 0}  # pre-drop generated-depth histogram
