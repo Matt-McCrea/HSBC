@@ -40,22 +40,34 @@ def despine(ax, keep=("left", "bottom")):
         ax.spines[s].set_visible(s in keep)
 
 
+RED_LT = "#e08a76"             # second TRADES line: same family as RED, clearly subordinate
+
 OUT = "analysis/plots/longhorizon"
 B = "ABIDES/log/paper_runs_downloaded"
 REAL = f"{OUT}/real_0129_1000_1200.csv"      # kept beside the figure, not in /tmp
+REAL_30 = f"{OUT}/real_0130_1000_1200.csv"
 
 SS_E4 = f"{B}/world_agent_INTC_2015-01-29_12-00-00_30_DDIM_0.0_10_val_ema=0.69__tdprior_sr_dn0.3/processed_orders.csv"
 BASE_0724 = f"{B}/world_agent_INTC_2015-01-29_12-00-00_30_DDIM_0.0_10_val_ema=0.724_tdprior_sr_dn0.3/processed_orders.csv"
 SINGLE = "ABIDES/log/world_agent_INTC_2015-01-29_12-00-00_30_DDIM_0.0_1_val_ema=0.763/processed_orders.csv"
 
+# The vanilla DDPM-100 replication of the published TRADES sampling default: 100 steps, checkpoint
+# val_ema=0.667, and NO decode-time flags. Earlier "TRADES" rows in this folder were either a
+# step-count ablation on OUR checkpoint (0.724, which carries PRICE_REANCHOR/UNCLAMP_DEPTH) or the
+# DDIM-1 single-step run — neither is the paper's default, so neither could carry this comparison.
+DDPM_29 = f"{B}/world_agent_INTC_2015-01-29_12-00-00_30_DDPM_0.0_100_val_ema=0.667/processed_orders.csv"
+DDPM_30 = f"{B}/world_agent_INTC_2015-01-30_12-00-00_30_DDPM_0.0_100_val_ema=0.667/processed_orders.csv"
+SS_E4_30 = f"{B}/world_agent_INTC_2015-01-30_12-00-00_30_DDIM_0.0_10_val_ema=0.69__tdprior_sr_dn0.3/processed_orders.csv"
+BASE_30 = f"{B}/world_agent_INTC_2015-01-30_12-00-00_30_DDIM_0.0_10_val_ema=0.724_tdprior_sr_dn0.3/processed_orders.csv"
 
-def ensure_real():
-    if os.path.exists(REAL):
+
+def ensure_real(path=REAL, date="2015-01-29"):
+    if os.path.exists(path):
         return
-    print(f"[real] {REAL} absent — rebuilding from LOBSTER")
+    print(f"[real] {path} absent — rebuilding from LOBSTER")
     subprocess.run([sys.executable, "-m", "evaluation.stylized_custom.lobster_real_reference",
-                    "--ticker", "INTC", "--date", "2015-01-29",
-                    "--st", "10:00:00", "--et", "12:00:00", "--out", REAL], check=True)
+                    "--ticker", "INTC", "--date", date,
+                    "--st", "10:00:00", "--et", "12:00:00", "--out", path], check=True)
 
 
 def load_mid(path):
@@ -70,34 +82,43 @@ def load_mid(path):
     return d.set_index("dt")["mid"].resample("1s").last().ffill().dropna()
 
 
-def draw(series, stem):
-    """series: list of (label, mid_series, colour, linewidth, zorder)"""
+def draw(series, stem, title=None, sub1=None, sub2=None, mark_collapse=True, day="2015-01-29",
+         legend_loc="lower left"):
+    """series: list of (label, mid_series, colour, linewidth, zorder)
+
+    mark_collapse gates the minute-73 annotation: it describes the DDIM-1 single-step trace, so on
+    any figure that does not plot that series it would point at nothing.
+    """
     n = min(len(s) for _, s, _, _, _ in series)
     t = np.arange(n) / 60.0
     fig, ax = plt.subplots(figsize=(11, 5.4))
     for lab, s, c, lw, z in series:
         ax.plot(t, s.values[:n], color=c, lw=lw, zorder=z, label=lab)
 
-    ax.axvline(73, color="#8a897f", lw=0.9, ls=":", zorder=1)
-    # Sits in the empty band between the model traces (~33.8+) and the collapsed line (~32.8-),
-    # with the arrow on the drop itself. The original position (32.4/32.2) overlapped the
-    # single-step trace, which only became obvious once that line was recoloured red.
-    ax.annotate("single-step collapse\nbegins (~min 73)", xy=(73.5, 33.15), xytext=(79, 33.42),
-                fontsize=9.5, color=INK2,
-                arrowprops=dict(arrowstyle="->", color=INK2, lw=0.9))
+    if mark_collapse:
+        ax.axvline(73, color="#8a897f", lw=0.9, ls=":", zorder=1)
+        # Sits in the empty band between the model traces (~33.8+) and the collapsed line (~32.8-),
+        # with the arrow on the drop itself. The original position (32.4/32.2) overlapped the
+        # single-step trace, which only became obvious once that line was recoloured red.
+        ax.annotate("single-step collapse\nbegins (~min 73)", xy=(73.5, 33.15), xytext=(79, 33.42),
+                    fontsize=9.5, color=INK2,
+                    arrowprops=dict(arrowstyle="->", color=INK2, lw=0.9))
 
     ax.set_xlabel("minutes into session  (10:00–12:00)")
     ax.set_ylabel("mid price ($)")
     ax.set_xlim(0, t[-1])
     despine(ax)
-    ax.legend(loc="lower left", frameon=False, fontsize=10)
+    ax.legend(loc=legend_loc, frameon=False, fontsize=10)
     fig.tight_layout(rect=[0, 0, 1, 0.87])
-    fig.text(0.02, 0.955, "Two-hour horizon: the corrected configuration holds where single-step fails",
+    fig.text(0.02, 0.955,
+             title or "Two-hour horizon: the corrected configuration holds where single-step fails",
              fontsize=13, fontweight="bold", color=INK, ha="left")
-    fig.text(0.02, 0.905, "INTC 2015-01-29. Both final-model candidates stay inside the real envelope for the "
-                          "full two hours;", fontsize=10.3, color=INK2, ha="left")
-    fig.text(0.02, 0.862, "the single-step replication crosses the conditioning boundary at ~minute 73 and "
-                          "never recovers.", fontsize=10.3, color=INK2, ha="left")
+    fig.text(0.02, 0.905,
+             sub1 or f"INTC {day}. Both final-model candidates stay inside the real envelope for the "
+                     "full two hours;", fontsize=10.3, color=INK2, ha="left")
+    fig.text(0.02, 0.862,
+             sub2 or "the single-step replication crosses the conditioning boundary at ~minute 73 and "
+                     "never recovers.", fontsize=10.3, color=INK2, ha="left")
     for ext, kw in (("png", {"dpi": 300}), ("pdf", {})):
         p = f"{OUT}/{stem}.{ext}"
         fig.savefig(p, **kw)
@@ -127,14 +148,65 @@ def main():
           ("TRADES single-step", single, RED, 1.6, 2)],
          "1_longhorizon_2h_4series")
 
-    # Numbers behind the figure, so the caption can be checked against it.
-    print("\n| series | start | end | min | max | range (tk) | ret1s_std (bp) | unique mids |")
-    print("|---|---|---|---|---|---|---|---|")
-    for lab, s in (("Real market", real), ("Ours: SS epoch 4", ss),
-                   ("Ours: 0.724", base), ("TRADES single-step", single)):
-        r = np.log(s).diff().dropna()
-        print(f"| {lab} | {s.iloc[0]:.2f} | {s.iloc[-1]:.2f} | {s.min():.2f} | {s.max():.2f} | "
-              f"{(s.max()-s.min())*100:.0f} | {r.std()*1e4:.2f} | {s.round(3).nunique()} |")
+    # --- vs the published TRADES default -------------------------------------------------
+    # The comparison the dissertation actually needs: our adopted model against the sampling
+    # configuration the TRADES paper specifies (DDPM, 100 steps, no decode-time corrections),
+    # rather than against the single-step variant we introduced for acceleration.
+    ddpm29 = load_mid(DDPM_29)
+    draw([("Real market", real, REAL_GREY, 1.6, 4),
+          ("Ours: SS epoch 4 (DDIM-10)", ss, BLUE, 1.6, 3),
+          ("TRADES default (DDPM-100)", ddpm29, RED, 1.6, 2)],
+         "6_longhorizon_2h_vs_default", mark_collapse=False,
+         title="Two-hour horizon: our model tracks the real envelope more closely than the TRADES default",
+         sub1="INTC 2015-01-29, 10:00–12:00. The published sampling default (DDPM, 100 steps, no "
+              "decode-time correction) runs",
+         sub2="3.2x the real one-second volatility (4.04 bp vs 1.26 bp); the adopted configuration "
+              "runs 1.65 bp.")
+
+    # All four, so the two TRADES configurations can be compared against each other directly.
+    draw([("Real market", real, REAL_GREY, 1.6, 5),
+          ("Ours: SS epoch 4 (DDIM-10)", ss, BLUE, 1.6, 4),
+          ("Ours: 0.724 baseline (DDIM-10)", base, BLUE_LT, 1.4, 3),
+          ("TRADES default (DDPM-100)", ddpm29, RED, 1.6, 2),
+          ("TRADES single-step (DDIM-1)", single, RED_LT, 1.4, 1)],
+         "7_longhorizon_2h_all",
+         title="Two-hour horizon: both TRADES sampling configurations leave the real envelope",
+         sub1="INTC 2015-01-29, 10:00–12:00. Single-step collapses downward at ~minute 73; the "
+              "100-step default drifts upward",
+         sub2="through the whole session. Both of our configurations stay inside the real range.")
+
+    # --- second test day ------------------------------------------------------------------
+    # 2015-01-30 is the other held-out day and the drift is far more pronounced there, so showing
+    # only 01-29 would understate it. Same series, same palette.
+    ensure_real(REAL_30, "2015-01-30")
+    real30, ss30, base30, ddpm30 = (load_mid(p) for p in (REAL_30, SS_E4_30, BASE_30, DDPM_30))
+    draw([("Real market", real30, REAL_GREY, 1.6, 5),
+          ("Ours: SS epoch 4 (DDIM-10)", ss30, BLUE, 1.6, 4),
+          ("Ours: 0.724 baseline (DDIM-10)", base30, BLUE_LT, 1.4, 3),
+          ("TRADES default (DDPM-100)", ddpm30, RED, 1.6, 2)],
+         "8_longhorizon_2h_0130_vs_default", mark_collapse=False, day="2015-01-30",
+         # Legend sits upper-left: the band below it carries the real trace, and at lower left the
+         # default "lower left" placement overprinted it.
+         legend_loc="upper left",
+         title="Second test day: the TRADES default ends $2.00 above the real close",
+         sub1="INTC 2015-01-30, 10:00–12:00. A single +$0.94 second at minute 39 supplies 47% of "
+              "that gap; the rest accrues as drift.",
+         sub2="The default traverses 222 ticks against the real day's 33. Both corrected "
+              "configurations stay within 45 ticks.")
+
+    # Numbers behind the figures, so the captions can be checked against them.
+    for day, rows in (("2015-01-29", (("Real market", real), ("Ours: SS epoch 4", ss),
+                                      ("Ours: 0.724", base), ("TRADES DDPM-100", ddpm29),
+                                      ("TRADES single-step", single))),
+                      ("2015-01-30", (("Real market", real30), ("Ours: SS epoch 4", ss30),
+                                      ("Ours: 0.724", base30), ("TRADES DDPM-100", ddpm30)))):
+        print(f"\nINTC {day}, 10:00–12:00")
+        print("| series | start | end | min | max | range (tk) | ret1s_std (bp) | unique mids |")
+        print("|---|---|---|---|---|---|---|---|")
+        for lab, s in rows:
+            r = np.log(s).diff().dropna()
+            print(f"| {lab} | {s.iloc[0]:.2f} | {s.iloc[-1]:.2f} | {s.min():.2f} | {s.max():.2f} | "
+                  f"{(s.max()-s.min())*100:.0f} | {r.std()*1e4:.2f} | {s.round(3).nunique()} |")
 
 
 if __name__ == "__main__":

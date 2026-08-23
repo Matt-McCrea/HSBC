@@ -4,6 +4,16 @@
 P2 two-hour runs, P3 step-count ablation, P4 book-balancing lever, P5 seed robustness. The single
 exception is the `0.724` seed-32 cell, which did not finish before the window closed.*
 
+> **Update 2026-08-24 — the published TRADES default is now measured.**
+> Vanilla DDPM-100 (ckpt `val_ema=0.667`, no decode flags) ran two hours on **both** test days.
+> LOB-Bench grand mean **0.533** (01-29) and **0.540** (01-30) against SS epoch 4's **0.257** —
+> **51.8% closer to real, at 12.1× lower per-order cost.** It fails by over-volatility and drift,
+> not by freezing: 4.04–5.24 bp one-second volatility against real 1.04–1.26, and a 222-tick range
+> on 01-30 against the real day's 33.
+> Full analysis, decomposition and figures 6–11: **`trades_default_results.md`**.
+> Every "TRADES" row *below this line* is either a step-count ablation on our own checkpoint or the
+> DDIM-1 single-step run — neither is the published default. Read them as such.
+
 ---
 
 ## The headline
@@ -167,3 +177,22 @@ All five phases landed. **P4** (long-horizon with the book-balancing lever) and 
 robustness) both completed and are analysed in `variance_ratio_analysis.md`. The only gap is the
 `0.724` seed-32 cell, which did not finish before the window closed — immaterial, since the other
 five seed cells agree closely.
+
+---
+
+## Files added 2026-08-24 (TRADES default)
+
+| File | Shows |
+|---|---|
+| `trades_default_results.md` | **full analysis of the published-default runs — start here** |
+| `6_longhorizon_2h_vs_default.png/.pdf` | 01-29: real, SS epoch 4, TRADES default |
+| `7_longhorizon_2h_all.png/.pdf` | 01-29: all five series, both TRADES configurations together |
+| `8_longhorizon_2h_0130_vs_default.png/.pdf` | 01-30, where the drift is most severe |
+| `9_stylized_DDPMdefault_0129_2h.png` | stylised facts, default vs real, 01-29 |
+| `10_stylized_DDPMdefault_0130_2h.png` | stylised facts, default vs real, 01-30 |
+| `11_lobbench_vs_default_0129.png/.pdf` | LOB-Bench per metric + grand mean, three configurations |
+| `ddpm_default_stats.csv` | every number behind the price-path tables |
+| `real_0130_1000_1200.csv` | 01-30 real reference, built from LOBSTER |
+
+Scripts: `scripts/ddpm_default_stats.py`, `scripts/make_longhorizon_fig_v2.py`,
+`scripts/make_lobbench_default_fig.py`. Raw LOB-Bench: `lob_bench_paper/default_01{29,30}/`.

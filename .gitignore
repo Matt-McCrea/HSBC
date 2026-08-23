@@ -60,3 +60,9 @@ analysis/dissertation_source_map.md
 analysis/call_prep_qa.md
 analysis/hsbc_update_brief.tex
 analysis/methodology_draft.tex
+
+# LOB-Bench intermediate slices: regenerable from the run CSV + LOBSTER file by score_batch.py,
+# and ~70-90 MB each. The scores themselves (lob_bench_scores.csv) ARE tracked.
+lob_bench_paper/**/data_gen/
+lob_bench_paper/**/data_real/
+analysis/plots/longhorizon/real_*_1000_1200.csv

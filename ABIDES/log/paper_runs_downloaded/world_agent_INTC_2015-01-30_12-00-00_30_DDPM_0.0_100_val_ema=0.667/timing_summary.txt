@@ -1,0 +1,4 @@
+[Timing/DDPM] 94679 orders generated
+  per order : 139.06 ms  (aug 6.54 ms + NN 132.53 ms)
+  total wall: 13166.4 s
+  throughput: 7.2 orders/s
