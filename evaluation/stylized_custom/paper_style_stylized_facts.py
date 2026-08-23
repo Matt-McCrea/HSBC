@@ -5,6 +5,19 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+# House palette (as in scripts/make_hsbc_figs_stability.py). Previously this script set no colours
+# at all and fell through to matplotlib's default cycle — C0 blue for the real series, C1 orange for
+# the generated one. Orange and blue sit close in value once printed; the red/blue pair separates
+# cleanly and matches the rest of the figure set.
+#
+# Order matters: `datasets` is [(real, ...), (generated, ...)], so the cycle assigns
+# blue -> real, red -> generated.
+C_REAL, C_GEN = "#2a78d6", "#c0492f"
+C_ZERO = "#8a897f"   # neutral: a zero line must not read as the blue real series
+plt.rcParams.update({
+    "axes.prop_cycle": plt.cycler(color=[C_REAL, C_GEN]),
+    "pdf.fonttype": 42, "ps.fonttype": 42,        # embed TrueType for LaTeX
+})
 
 MAX_LAG = 30
 
@@ -161,7 +174,7 @@ def main(real_path, gen_path, out_path, real_label="Real", gen_label="TRADES"):
     # 1. Log-return autocorrelation
     for label, df in datasets:
         axes[0].plot(lags, autocorr(df["log_return"], max_lag), marker="o", linewidth=1, label=label)
-    axes[0].axhline(0, linewidth=0.8)
+    axes[0].axhline(0, linewidth=0.8, color=C_ZERO, zorder=0)
     axes[0].set_title("Log returns autocorrelation")
     axes[0].set_xlabel(LAGLBL)
     axes[0].set_ylabel("Autocorrelation")
@@ -172,7 +185,7 @@ def main(real_path, gen_path, out_path, real_label="Real", gen_label="TRADES"):
         f = rolling_features(df)
         axes[1].plot(lags, corr_by_lag(f["rolling_volume"], f["volatility"], max_lag),
                      marker="o", linewidth=1, label=label)
-    axes[1].axhline(0, linewidth=0.8)
+    axes[1].axhline(0, linewidth=0.8, color=C_ZERO, zorder=0)
     axes[1].set_title("Correlation between volume and volatility")
     axes[1].set_xlabel(LAGLBL)
     axes[1].set_ylabel("Correlation")
@@ -183,7 +196,7 @@ def main(real_path, gen_path, out_path, real_label="Real", gen_label="TRADES"):
         f = rolling_features(df)
         axes[2].plot(lags, corr_by_lag(f["log_return"], f["volatility"], max_lag),
                      marker="o", linewidth=1, label=label)
-    axes[2].axhline(0, linewidth=0.8)
+    axes[2].axhline(0, linewidth=0.8, color=C_ZERO, zorder=0)
     axes[2].set_title("Correlation between returns and volatility")
     axes[2].set_xlabel(LAGLBL)
     axes[2].set_ylabel("Correlation")
@@ -204,7 +217,7 @@ def main(real_path, gen_path, out_path, real_label="Real", gen_label="TRADES"):
     for label, df in datasets:
         axes[4].plot(lags, autocorr(df["log_return"].abs(), max_lag),
                      marker="o", linewidth=1, label=label)
-    axes[4].axhline(0, linewidth=0.8)
+    axes[4].axhline(0, linewidth=0.8, color=C_ZERO, zorder=0)
     axes[4].set_title("Autocorrelation log returns distribution")
     axes[4].set_xlabel(LAGLBL)
     axes[4].set_ylabel("Autocorrelation")
