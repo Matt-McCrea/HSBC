@@ -32,6 +32,7 @@ CAP_SECS=2400                 # 40 min/day — the established "unstable" criter
 LIMIT_TRAIN_BATCHES="0.15"    # short epochs => more early checkpoints (see run.py)
 SIGMAS="0.15 0.3 0.45"        # first bracket; widen/narrow from the phase's own output
 DEPTH_NOISE="0.3"             # used by `stability`; set from the sigma phase result
+TYPE_PRIOR=""                 # real marginals "L,C,M"; REQUIRED for ss-retrain on a new ticker
 WITH_TRADES_DEFAULT=0
 RUN_DIR=""
 # Interpreter. The remote venv provides `python`; some systems only have `python3`. Override with
@@ -49,6 +50,7 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --limit-train-batches) LIMIT_TRAIN_BATCHES="$2"; shift 2;;
   --sigmas) SIGMAS="$2"; shift 2;;
   --depth-noise) DEPTH_NOISE="$2"; shift 2;;
+  --type-prior) TYPE_PRIOR="$2"; shift 2;;
   --seed) SEED="$2"; shift 2;;
   --with-trades-default) WITH_TRADES_DEFAULT=1; shift;;
   --dry-run) DRY=1; shift;;
@@ -289,6 +291,26 @@ ss-retrain)
   else
     say "no checkpoint cleared the period. FALLBACK: retraining from the first checkpoint,"
     say "then re-run --phase stability to re-test the SS lineage."
+  fi
+
+  # The SS rollout decodes its own generated block with this prior before feeding it back as
+  # conditioning, so it is a TRAINING input, not just a simulation flag. Refuse rather than
+  # silently retrain a non-INTC ticker against Intel's type mix.
+  if [[ -z "$TYPE_PRIOR" ]]; then
+    if [[ "$TICKER" == "INTC" ]]; then
+      say "type prior: INTC default (0.49,0.48,0.03)"
+    else
+      echo "!! --type-prior is REQUIRED for $TICKER. The scheduled-sampling rollout applies it"
+      echo "   during training (diffusion_engine.py:_decode_type); the default is INTC's and would"
+      echo "   train $TICKER against the wrong type mix. Derive it from the TRAINING days:"
+      echo "     python -m evaluation.stylized_custom.lobster_real_reference --ticker $TICKER \\"
+      echo "        --date <a TRAINING day> --st 09:30:00 --et 16:00:00 --out /tmp/tr.csv"
+      echo "   then read the LIMIT/CANCELLED/EXECUTED shares off it (averaged over training days)."
+      exit 1
+    fi
+  else
+    export TYPE_PRIOR
+    say "type prior for the SS rollout: $TYPE_PRIOR"
   fi
 
   touch SCHEDULED_SAMPLING_FLAG RESUME_TRAINING_FLAG KEEP_EPOCH_CHECKPOINTS_FLAG

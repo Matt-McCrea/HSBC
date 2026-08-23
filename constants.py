@@ -284,6 +284,18 @@ LEN_ORDER_CGAN = 7
 # run without editing this file; defaults reproduce the INTC January 2015 period exactly.
 DATE_TRADING_DAYS = [os.environ.get("TRADING_START", "2015-01-02"),
                      os.environ.get("TRADING_END", "2015-01-30")]
+
+# Real next-event marginals [limit, cancel, market] for the prior-corrected type decode.
+#
+# USED IN TRAINING, not only at simulation time: the scheduled-sampling rollout decodes its own
+# generated block with this prior before feeding it back as conditioning
+# (models/diffusers/diffusion_engine.py:_decode_type). So an SS retrain on a stock whose marginals
+# differ from INTC's trains against self-conditioning with the wrong type mix — it must be set
+# BEFORE the retrain, not just before simulation.
+#
+# Derive from the TRAINING days of the stock in question (not a held-out test day, which leaks).
+# Default is INTC's, so existing behaviour is unchanged when unset.
+TYPE_PRIOR = tuple(float(x) for x in os.environ.get("TYPE_PRIOR", "0.49,0.48,0.03").split(","))
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 DIR_EXPERIMENTS = "data/experiments"
 DIR_SAVED_MODEL = "data/checkpoints"

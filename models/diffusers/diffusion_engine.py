@@ -77,7 +77,13 @@ class DiffusionEngine(LightningModule):
         self._ss_used, self._ss_total = 0, 0
         self._last_ckpt_epoch = -1                  # for KEEP_EPOCH_CHECKPOINTS: one save per epoch
         # prior-corrected nearest-anchor type decode, matching --type-decode prior at inference
-        self._ss_log_prior = torch.log(torch.tensor([0.49, 0.48, 0.03], device=cst.DEVICE))
+        # Ticker-specific — see cst.TYPE_PRIOR. Was hardcoded to INTC's [0.49, 0.48, 0.03], which
+        # would have had a TSLA retrain learn to recover from self-conditioning carrying Intel's
+        # type mix (TSLA's own marginals are nearer 0.45/0.38/0.17).
+        self._ss_log_prior = torch.log(torch.tensor(cst.TYPE_PRIOR, device=cst.DEVICE))
+        if cst.SCHEDULED_SAMPLING:
+            print(f"[SS] rollout type prior = {cst.TYPE_PRIOR}"
+                  f"{'  <-- INTC default; set TYPE_PRIOR for another stock' if cst.TYPE_PRIOR == (0.49, 0.48, 0.03) else ''}")
         if self._ss_on:
             steps = len(getattr(self.diffuser, "t", [])) or self.num_diffusionsteps
             print(f"[scheduled-sampling] ON  p_max={self._ss_p_max} ramp_frac={self._ss_ramp_frac} "
