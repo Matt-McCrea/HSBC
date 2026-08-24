@@ -125,10 +125,16 @@ def run(config: Configuration, accelerator, model=None):
         accelerator=accelerator,
         precision=cst.PRECISION,
         max_epochs=config.HYPER_PARAMETERS[cst.LearningHyperParameter.EPOCHS],
-        callbacks=[
-            EarlyStopping(monitor="val_ema_loss", mode="min", patience=6, verbose=True, min_delta=0.005),
-            TQDMProgressBar(refresh_rate=100)
-            ],
+        # Scheduled sampling deliberately RAISES val_ema_loss (it trains on the model's own noisy
+        # rollouts for closed-loop robustness), so a min-loss EarlyStopping kills it after one epoch —
+        # and on resume its patience counter restores near the limit and fires immediately. Omit it
+        # under scheduled sampling; the run is then bounded by max_epochs / the caller's time-box, and
+        # the SS lineage is selected on simulation stability, not on this loss.
+        callbacks=(
+            [TQDMProgressBar(refresh_rate=100)] if cst.SCHEDULED_SAMPLING else
+            [EarlyStopping(monitor="val_ema_loss", mode="min", patience=6, verbose=True, min_delta=0.005),
+             TQDMProgressBar(refresh_rate=100)]
+            ),
         num_sanity_val_steps=0,
         detect_anomaly=False,
         profiler=None,
@@ -186,10 +192,11 @@ def run_wandb(config: Configuration, accelerator):
             accelerator=accelerator,
             precision=cst.PRECISION,
             max_epochs=config.HYPER_PARAMETERS[cst.LearningHyperParameter.EPOCHS],
-            callbacks=[
-                EarlyStopping(monitor="val_ema_loss", mode="min", patience=6, verbose=True, min_delta=0.005),
-                TQDMProgressBar(refresh_rate=1000)
-            ],
+            callbacks=(
+                [TQDMProgressBar(refresh_rate=1000)] if cst.SCHEDULED_SAMPLING else
+                [EarlyStopping(monitor="val_ema_loss", mode="min", patience=6, verbose=True, min_delta=0.005),
+                 TQDMProgressBar(refresh_rate=1000)]
+            ),
             num_sanity_val_steps=0,
             logger=wandb_logger,
             detect_anomaly=False,
