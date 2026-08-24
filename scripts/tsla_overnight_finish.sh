@@ -60,7 +60,7 @@ if [[ "$DRY" == "1" ]]; then
   cat <<EOF
 === TSLA overnight finish ===
 now       : $(date +%H:%M)
-handover  : $HANDOVER  (or once $MIN_CKPTS checkpoints exist)
+handover  : $HANDOVER  (or once $MIN_CKPTS NEW checkpoints exist)
 deadline  : $DEADLINE
 test days : ${DAYS:-<none found>}
 window    : $ST-$ET
@@ -83,9 +83,16 @@ EOF
 fi
 
 # ---- phase 1: wait, then stop training ------------------------------------
-say "waiting for handover at $HANDOVER (or $MIN_CKPTS checkpoints)"
+# Snapshot the checkpoints that ALREADY exist. "New" = produced by THIS SS lineage, so the
+# pre-existing baseline/INTC checkpoints can never trip the early handover. (This is the bug that
+# stopped the run at +10s: 13 old checkpoints counted as if the SS lineage had made them.)
+BASELINE_CKPTS="$OUT_DIR/.baseline_ckpts"
+ls data/checkpoints/TRADES/*.ckpt 2>/dev/null | sort > "$BASELINE_CKPTS"
+N0=$(wc -l < "$BASELINE_CKPTS" | tr -d ' ')
+new_ckpts () { ls data/checkpoints/TRADES/*.ckpt 2>/dev/null | sort | comm -13 "$BASELINE_CKPTS" - ; }
+say "baseline: $N0 pre-existing checkpoints (excluded); handover after $MIN_CKPTS NEW ones or $HANDOVER"
 while true; do
-  N=$(ls data/checkpoints/TRADES/*.ckpt 2>/dev/null | wc -l | tr -d ' ')
+  N=$(new_ckpts | wc -l | tr -d ' ')
   NOW=$(date +%s)
   [[ "$NOW" -ge "$HANDOVER_E" ]] && { say "handover time reached ($N checkpoints)"; break; }
   [[ "$N" -ge "$MIN_CKPTS" ]] && { say "$N checkpoints reached — handing over early"; break; }
@@ -96,10 +103,17 @@ done
 pkill -f main.py 2>/dev/null; sleep 10
 rm -f SCHEDULED_SAMPLING_FLAG RESUME_TRAINING_FLAG    # decode-time runs must not resume training
 touch UNCLAMP_DEPTH_FLAG PRICE_REANCHOR_FLAG
-say "training stopped; $(ls data/checkpoints/TRADES/*.ckpt 2>/dev/null | wc -l | tr -d ' ') checkpoints present"
+say "training stopped; $(new_ckpts | wc -l | tr -d ' ') NEW SS checkpoints ($(ls data/checkpoints/TRADES/*.ckpt 2>/dev/null | wc -l | tr -d ' ') total present)"
 
-# Newest checkpoint = the furthest-trained SS epoch.
-SS_CKPT=$(ls -t data/checkpoints/TRADES/*.ckpt 2>/dev/null | head -1)
+# The SS checkpoint is the newest of the NEW ones — never a pre-existing file.
+SS_CKPT=""
+while IFS= read -r f; do [[ -z "$SS_CKPT" || "$f" -nt "$SS_CKPT" ]] && SS_CKPT="$f"; done < <(new_ckpts)
+# Guard: if the SS lineage produced nothing (or only the baseline), do NOT run ss_* cells against
+# the baseline — that silently duplicates base_* (exactly the failure we are fixing).
+if [[ -z "$SS_CKPT" || "$SS_CKPT" -ef "${BASE_CKPT:-/nonexistent}" ]]; then
+  say "!! NO new SS checkpoint produced — the SS lineage did not train. Skipping ss_* cells."
+  SS_CKPT=""
+fi
 say "SS checkpoint : $(basename "${SS_CKPT:-none}")"
 say "baseline ckpt : $(basename "${BASE_CKPT:-none}")"
 
