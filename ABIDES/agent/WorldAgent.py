@@ -35,7 +35,7 @@ class WorldAgent(Agent):
                  depth_temp=1.0, depth_reshape=None, size_reshape=None, depth_noise=0.0,
                  dn_target_exec=0.0, cancel_boost=0.0, depth_drift=0.0, depth_drift_phi=0.995,
                  book_target_thick=0.0, book_cancel_rate=0.5, cond_clip=0.0,
-                 flow_balance=0.0, flow_balance_window=500, type_prior=None):
+                 flow_balance=0.0, flow_balance_window=500, depth_cond_clip=0.0, type_prior=None):
 
         super().__init__(id, name, type, random_state=random_state, log_to_file=log_orders)
         self.count_neg_size = 0
@@ -145,6 +145,8 @@ class WorldAgent(Agent):
         self.book_target_thick = book_target_thick  # cancel own resting touch when a side > this x real mean
         self.book_cancel_rate = book_cancel_rate    #   level size; fraction of the excess removed per step.
         self.cond_clip = cond_clip                  # clip z-scored book SIZE conditioning to [-C, C]
+        self.depth_cond_clip = depth_cond_clip      # clip z-scored event DEPTH conditioning to [-C, C]
+        self.depth_cond_clipped = 0                 # DIAG: depth-conditioning entries clipped by --depth-cond-clip
         # --flow-balance: adaptive directional bias that counters one-sided limit-order FLOW, the
         # CROSS-DAY drift driver Stage 1 isolated (limOFI ~-7000 while B-S/exec stay balanced; drift
         # persists at every sigma, so it is directional, not a variance problem). This is the flow-side
@@ -260,11 +262,12 @@ class WorldAgent(Agent):
         if self.cancel_boost != 0.0 or self.depth_drift > 0.0:
             print("DIAG impact_levers: cancel_boost={} depth_drift={} depth_drift_phi={}".format(
                 self.cancel_boost, self.depth_drift, self.depth_drift_phi))
-        if self.book_target_thick > 0.0 or self.cond_clip > 0.0:
+        if self.book_target_thick > 0.0 or self.cond_clip > 0.0 or self.depth_cond_clip > 0.0:
             print("DIAG stability_levers: book_target_thick={} book_cancel_rate={} book_cancels_issued={} "
-                  "book_cancel_qty={} | cond_clip={} cond_clipped_count={}".format(
+                  "book_cancel_qty={} | cond_clip={} cond_clipped_count={} | depth_cond_clip={} depth_cond_clipped={}".format(
                       self.book_target_thick, self.book_cancel_rate, self.book_cancels_issued,
-                      self.book_cancel_qty, self.cond_clip, self.cond_clipped_count))
+                      self.book_cancel_qty, self.cond_clip, self.cond_clipped_count,
+                      self.depth_cond_clip, self.depth_cond_clipped))
         if self.flow_balance > 0.0:
             imb = (sum(self._flow_buf) / len(self._flow_buf)) if self._flow_buf else 0.0
             print("DIAG flow_balance: strength={} window={} biased_limits={} final_limit_imbalance={:.3f}".format(
@@ -1157,6 +1160,17 @@ class WorldAgent(Agent):
                     s[1] = max(s[1], float(v.max()))
                     s[2] += float(v.sum())
                     s[3] += len(v)
+
+        # --depth-cond-clip: bound the standardised DEPTH conditioning before it becomes the model
+        # input, so a single order priced far through the book cannot cascade into the next step. This
+        # is the depth analogue of PRICE_REANCHOR (which guards the price level) and --cond-clip (book
+        # size). Depth is the channel that leaves range on a high-priced instrument such as TSLA, where
+        # a small dollar mispricing is a large tick-depth. The cond_stats above record the RAW range, so
+        # if the clamp arrests the divergence the raw range stays bounded too.
+        if self.depth_cond_clip > 0.0 and "depth" in orders_dataframe.columns:
+            dcol = orders_dataframe["depth"].to_numpy(dtype=float)
+            self.depth_cond_clipped += int(np.count_nonzero(np.abs(dcol) > self.depth_cond_clip))
+            orders_dataframe["depth"] = np.clip(dcol, -self.depth_cond_clip, self.depth_cond_clip)
 
         return torch.from_numpy(orders_dataframe.to_numpy()).to(cst.DEVICE, torch.float32)
 
