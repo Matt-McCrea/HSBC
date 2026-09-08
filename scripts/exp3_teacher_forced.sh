@@ -10,23 +10,23 @@
 # match here, only the checkpoint + PRICE_REANCHOR variant (which changes preprocessing/
 # conditioning, so needs its own run, same as Exp 2). GPU required -- run on the remote box.
 #
-# Takes an EXACT --ckpt-path, not a val_ema number: two checkpoints can share a rounded val_ema
-# (see analysis/MASTER_RESULTS.md 1.4), so --id matching is ambiguous by design -- always use the
-# exact file from analysis/model_under_test.md's "Confirmed checkpoint" section.
+# The checkpoint does NOT need to be typed -- it's read automatically from the CKPT_PATH= line in
+# analysis/model_under_test.md, written by `bash scripts/exp1_pin_checkpoint.sh`. Pass --ckpt-path
+# only to override that (never a bare val_ema number -- two checkpoints can share a rounded
+# val_ema, see analysis/MASTER_RESULTS.md 1.4).
 #
-# Usage:
-#   bash scripts/exp3_teacher_forced.sh --ckpt-path data/checkpoints/TRADES/<confirmed>.ckpt --reanchor both
+# ONE COMMAND, ZERO ARGUMENTS:
+#   bash scripts/exp3_teacher_forced.sh
 set -uo pipefail
 CKPT_PATH=""; REANCHOR="both"; N_WINDOWS=4096; OUT_DIR="exp3_results/$(date +%Y%m%d_%H%M%S)"
 while [[ $# -gt 0 ]]; do case "$1" in
   --ckpt-path) CKPT_PATH="$2"; shift 2;; --reanchor) REANCHOR="$2"; shift 2;;
   --n-windows) N_WINDOWS="$2"; shift 2;; --out-dir) OUT_DIR="$2"; shift 2;;
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
-[[ -n "$CKPT_PATH" ]] || { echo "!! --ckpt-path required -- the EXACT file from"; \
-  echo "   analysis/model_under_test.md's Confirmed checkpoint section."; exit 1; }
+
+source "$(dirname "$0")/_ckpt_lib.sh"
+CKPT_PATH=$(resolve_ckpt_path "$CKPT_PATH") || exit 1
 [[ -f "$CKPT_PATH" ]] || { echo "!! checkpoint not found: $CKPT_PATH"; exit 1; }
-grep -q "^\*(to be filled in" analysis/model_under_test.md 2>/dev/null && \
-  { echo "!! analysis/model_under_test.md's 'Confirmed checkpoint' section is still blank."; exit 1; }
 mkdir -p "$OUT_DIR"
 
 run_variant () {  # run_variant <reanchor_on:0|1>
@@ -45,6 +45,4 @@ run_variant () {  # run_variant <reanchor_on:0|1>
 [[ "$REANCHOR" == "on" || "$REANCHOR" == "both" ]] && run_variant 1
 [[ "$REANCHOR" == "off" || "$REANCHOR" == "both" ]] && run_variant 0
 
-echo ""; echo "Done. Compare bucket_early vs bucket_late in $OUT_DIR/open_loop_*.json against"
-echo "Exp 2's early-vs-late-session behaviour: if open-loop stays flat but closed-loop (Exp 2)"
-echo "still fails, that confirms compounding self-generated error as the mechanism."
+echo ""; echo "Done. Next: cat $OUT_DIR/open_loop_noreanchor.txt   (read bucket_early vs bucket_late)"

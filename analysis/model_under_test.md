@@ -87,5 +87,12 @@ picture:
 
 ## Confirmed checkpoint
 
-*(to be filled in once Track B step 1 or 2 above completes — do not run Exp 2/3/4 against
-anything until this section is filled in with a specific file path and flag state)*
+**This section is written automatically by `bash scripts/exp1_pin_checkpoint.sh`** — the moment it
+finds exactly one unambiguous `val_ema=0.724*` file, it appends a `CKPT_PATH=...` line below and
+every other script reads it from here. Nothing needs to be typed or pasted by hand: `exp2`/`exp3`
+pick it up on their own when run with no `--ckpt-path` argument. Do not hand-edit the `CKPT_PATH=`
+line — rerun `exp1_pin_checkpoint.sh` instead, so this file and what actually ran always agree.
+
+*(empty until `exp1_pin_checkpoint.sh` finds an unambiguous match on the box that actually has the
+checkpoint — this local test machine doesn't, so this stays empty here; that test run's dummy
+0.724 file has been deleted)*

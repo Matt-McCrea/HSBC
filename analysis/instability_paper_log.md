@@ -102,6 +102,27 @@ instead of the plain baseline, or vice versa. Closed this before it could bite:
   mixed checkpoint directory would otherwise silently turn "robustness across checkpoints from
   this training run" into "robustness across unrelated runs"); `--include-decoys` overrides.
 
+## 2026-09-08 — Redesigned for a no-copy-paste remote terminal
+
+User feedback after the first remote attempt: pasting the checkpoint path into
+`analysis/model_under_test.md`'s markdown did nothing — no script ever read it back out, so it was
+purely decorative. Combined with "I cannot copy and paste on the remote," hand-typing a full
+checkpoint path was exactly the failure mode that happened. Also: the runbook gave phase labels
+("B1 pilot") instead of literal commands. Fixed both:
+
+- `analysis/model_under_test.md`'s "Confirmed checkpoint" section is now a machine-readable
+  `CKPT_PATH=...` line, not freeform text.
+- `scripts/exp1_pin_checkpoint.sh` now WRITES that line automatically the moment it finds exactly
+  one unambiguous `val_ema=0.724*` match — nothing to type or paste.
+- New `scripts/_ckpt_lib.sh`, sourced by `exp2_survival_sweep.sh` and `exp3_teacher_forced.sh`:
+  resolves the checkpoint from that line automatically; `--ckpt-path` is now an optional override,
+  not a required argument.
+- `exp2_survival_sweep.sh` gained `--smoke`/`--pilot` zero-typing presets; every Track B script
+  now runs as a single short command with no flags in the common case.
+- `rl_execution/RUNBOOK_instability.md` rewritten as six numbered, literal, copy-paste-free
+  commands (each stated as what to type, what it does, and what to check), replacing the old
+  phase-label ("B0"/"B1"/...) style.
+
 ## 2026-09-07 — Track B package built (scripts only, not yet run)
 
 Built the paste-back package for the remote GPU box: `rl_execution/survival_metrics.py` (frozen/

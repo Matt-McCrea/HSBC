@@ -10,11 +10,14 @@
 # Resumable via .done sentinels. GPU REQUIRED (loads and samples the model) -- do not run this
 # locally, per this project's own convention (see rl_execution/train.py, evaluate.py, benchmark.py).
 #
-# Usage (pilot, per the plan's own suggestion -- run this FIRST):
-#   bash scripts/exp2_survival_sweep.sh --days "20150130 20150107 20150115" --seeds "30 31 32 33 34" \
-#       --et 10:30:00 --ckpt-path data/checkpoints/TRADES/<confirmed>.ckpt
-# Usage (full sweep, only after the pilot's failure pattern looks like the dissertation's):
-#   bash scripts/exp2_survival_sweep.sh --ckpt-path data/checkpoints/TRADES/<confirmed>.ckpt
+# The checkpoint does NOT need to be typed -- it's read automatically from the CKPT_PATH= line in
+# analysis/model_under_test.md, written by `bash scripts/exp1_pin_checkpoint.sh`. Pass --ckpt-path
+# only to override that.
+#
+# THREE COMMANDS, IN THIS ORDER, EACH TAKING ZERO ARGUMENTS:
+#   bash scripts/exp2_survival_sweep.sh --smoke     # 1 day, 2 seeds, 30min  -- run this FIRST
+#   bash scripts/exp2_survival_sweep.sh --pilot      # 3 days, 5 seeds, 2h   -- run SECOND
+#   bash scripts/exp2_survival_sweep.sh              # full sweep -- only after --pilot looks right
 set -uo pipefail
 TICKER="INTC"; ST="09:30:00"; ET="13:30:00"   # ET default: 4h horizon, as long as practically possible
 DAYS="20150102 20150105 20150106 20150107 20150108 20150109 20150112 20150113 20150114 20150115 \
@@ -24,17 +27,16 @@ REANCHOR="both"   # on | off | both -- the price-reanchoring open question (see 
 CKPT_PATH=""
 OUT_DIR="exp2_results/$(date +%Y%m%d_%H%M%S)"
 while [[ $# -gt 0 ]]; do case "$1" in
+  --smoke) DAYS="20150130"; SEEDS="30 31"; ET="10:00:00"; REANCHOR="off"; shift;;
+  --pilot) DAYS="20150130 20150107 20150115"; SEEDS="30 31 32 33 34"; ET="11:30:00"; shift;;
   --days) DAYS="$2"; shift 2;; --seeds) SEEDS="$2"; shift 2;; --et) ET="$2"; shift 2;;
   --reanchor) REANCHOR="$2"; shift 2;; --ckpt-path) CKPT_PATH="$2"; shift 2;;
   --out-dir) OUT_DIR="$2"; shift 2;;
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
 
-[[ -n "$CKPT_PATH" ]] || { echo "!! --ckpt-path required. See analysis/model_under_test.md for"; \
-  echo "   which checkpoint (its 'Confirmed checkpoint' section must be filled in FIRST)."; exit 1; }
+source "$(dirname "$0")/_ckpt_lib.sh"
+CKPT_PATH=$(resolve_ckpt_path "$CKPT_PATH") || exit 1
 [[ -f "$CKPT_PATH" ]] || { echo "!! checkpoint not found: $CKPT_PATH"; exit 1; }
-grep -q "^\*(to be filled in" analysis/model_under_test.md 2>/dev/null && \
-  { echo "!! analysis/model_under_test.md's 'Confirmed checkpoint' section is still blank."; \
-    echo "   Fill it in (file path + flag state actually used) before running Exp 2 for real."; exit 1; }
 
 if pgrep -f "main.py" > /dev/null; then echo "!! training (main.py) running — kill it first (single GPU)."; exit 1; fi
 mkdir -p "$OUT_DIR/logs"; SUM="$OUT_DIR/summary.md"
@@ -120,5 +122,4 @@ with open(sys.argv[2], "a") as f:
 PY
 
 echo ""; echo "Done. Summary: $SUM"
-echo "READ: build the survival-fraction-over-time curve (pooled + per-day) from *.score.json --"
-echo "the plan's headline chart. Each run's full CSV is under its own ABIDES/log/world_agent_... dir."
+echo "Next: cat $SUM   (read it -- ERROR rows or a low survival% mean stop here, not proceed)"

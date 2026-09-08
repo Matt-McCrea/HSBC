@@ -14,8 +14,8 @@
 # "robustness across checkpoints from THIS training run" into "robustness across unrelated runs."
 # Pass --include-decoys to sweep everything anyway.
 #
-# Usage:
-#   bash scripts/exp4_checkpoint_sweep.sh --day 20150107 --seeds "30 31 32 33 34" --et 10:30:00
+# ONE COMMAND, ZERO ARGUMENTS (defaults already match a sensible short battery):
+#   bash scripts/exp4_checkpoint_sweep.sh
 set -uo pipefail
 TICKER="INTC"; ST="09:30:00"; ET="10:30:00"; DAY="20150107"
 SEEDS="30 31 32 33 34"; CKPT_DIR="data/checkpoints/TRADES"; INCLUDE_DECOYS=0

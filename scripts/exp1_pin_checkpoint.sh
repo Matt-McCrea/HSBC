@@ -63,11 +63,19 @@ N_MATCHES=$(echo "$MATCHES" | grep -c . || true)
 if [[ "$N_MATCHES" -eq 1 ]]; then
   echo "  FOUND exactly one: $MATCHES"
   echo "  This is the Phase-2 baseline per analysis/model_under_test.md."
-  echo ""
-  echo "  ACTION: copy this EXACT path into analysis/model_under_test.md's 'Confirmed checkpoint'"
-  echo "  section now, then use it with every Track B script's --ckpt-path (never --id/-id, which"
-  echo "  matches by rounded val_ema and can silently pick the wrong file if two checkpoints share"
-  echo "  one — see analysis/MASTER_RESULTS.md 1.4)."
+  python3 - "$MATCHES" <<'PY'
+import re, sys
+path, doc = sys.argv[1], "analysis/model_under_test.md"
+text = open(doc).read()
+block = ("## Confirmed checkpoint\n\n"
+         "**Written automatically by exp1_pin_checkpoint.sh — do not hand-edit.**\n\n"
+         f"CKPT_PATH={path}\n")
+text = re.sub(r"## Confirmed checkpoint\n.*", block, text, flags=re.S) if "## Confirmed checkpoint" in text \
+    else text.rstrip("\n") + "\n\n" + block
+open(doc, "w").write(text)
+print(f"  wrote CKPT_PATH={path} into {doc} -- nothing left to type by hand.")
+PY
+  echo "  Next: bash scripts/exp2_survival_sweep.sh --smoke"
 elif [[ "$N_MATCHES" -gt 1 ]]; then
   echo "  AMBIGUOUS — $N_MATCHES files all match val_ema=0.724*:"
   echo "$MATCHES" | sed 's/^/    /'
@@ -80,9 +88,5 @@ else
   echo "  whichever machine trained it (never committed to git) and may have been lost the same"
   echo "  way 0.627 was (see commit b0f449c). If it's genuinely not on this box, retrain per"
   echo "  analysis/model_under_test.md's 'What Track B must do' section — do NOT guess and do NOT"
-  echo "  proceed to Exp 2/3/4 until that file's 'Confirmed checkpoint' section is filled in."
+  echo "  proceed to Exp 2/3/4 until this script reports exactly one match."
 fi
-
-echo ""
-echo "READ: fill in analysis/model_under_test.md's 'Confirmed checkpoint' section with the EXACT"
-echo "file path this determines, before any Track B script runs."
