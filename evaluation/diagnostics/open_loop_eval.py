@@ -42,20 +42,43 @@ def parse_args():
     ap.add_argument("--churn-steps", type=int, default=3, help="CHURN: early steps to renoise")
     ap.add_argument("--churn-strength", type=float, default=0.3, help="CHURN: renoise strength kappa")
     ap.add_argument("--id", type=float, default=None, help="checkpoint val loss (default: best)")
+    ap.add_argument("--ckpt-path", type=str, default=None,
+                    help="exact checkpoint file, bypasses --id val_ema matching entirely -- use "
+                         "this whenever more than one checkpoint could share a rounded val_ema "
+                         "(same landmine documented in analysis/MASTER_RESULTS.md 1.4: "
+                         "'0.69_epoch=2 and 0.69_epoch=4 are indistinguishable by path' under "
+                         "--id matching). Mirrors world_agent_sim.py's own --ckpt-path.")
     ap.add_argument("--stock", type=str, default="INTC")
     ap.add_argument("--split", type=str, default="test", choices=["test", "val", "train"])
     ap.add_argument("--n-windows", type=int, default=2048)
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--out", type=str, default=None, help="JSON output path")
+    ap.add_argument("--bucket-by-time", action="store_true",
+                    help="Experiment 3 (instability paper): also split results into early- vs "
+                         "late-session halves (by each window's real conditioning time), instead "
+                         "of only the single pooled summary. Answers whether teacher-forced "
+                         "per-step accuracy degrades over the session even when the model never "
+                         "sees its own output -- if it stays flat here but the closed-loop "
+                         "simulation still fails, the failure is specifically about compounding "
+                         "self-generated error, not a generic late-session blind spot.")
     ap.add_argument("--dry-run", action="store_true",
                     help="verify checkpoint/dataset paths and arg wiring, skip model sampling")
     return ap.parse_args()
 
 
-def find_checkpoint(symbol, wanted_val_loss):
-    """Same discovery logic as world_agent_sim.py: best (lowest) val loss, or exact --id."""
+def find_checkpoint(symbol, wanted_val_loss, ckpt_path=None):
+    """Same discovery logic as world_agent_sim.py: exact --ckpt-path, best (lowest) val loss, or
+    --id. Errors out (rather than silently picking the last match) if --id is ambiguous -- two
+    checkpoints can share a rounded val_ema (see analysis/MASTER_RESULTS.md 1.4).
+    """
+    if ckpt_path is not None:
+        p = Path(ckpt_path)
+        if not p.exists():
+            raise FileNotFoundError(f"--ckpt-path does not exist: {ckpt_path}")
+        return p
     dir_path = Path(cst.DIR_SAVED_MODEL) / cst.Models.TRADES.value
     best_val_loss, checkpoint_reference = np.inf, None
+    id_matches = []
     for file in dir_path.iterdir():
         if symbol not in file.name:
             continue
@@ -65,9 +88,15 @@ def find_checkpoint(symbol, wanted_val_loss):
             continue
         if wanted_val_loss is not None:
             if val_loss == wanted_val_loss:
+                id_matches.append(file)
                 checkpoint_reference = file
         elif val_loss < best_val_loss:
             best_val_loss, checkpoint_reference = val_loss, file
+    if wanted_val_loss is not None and len(id_matches) > 1:
+        names = "\n  ".join(str(f) for f in id_matches)
+        raise ValueError(f"--id {wanted_val_loss} matches {len(id_matches)} checkpoints "
+                         f"(ambiguous by rounded val_ema) -- use --ckpt-path with the exact file "
+                         f"instead:\n  {names}")
     if checkpoint_reference is None:
         raise FileNotFoundError(f"No matching checkpoint for {symbol} in {dir_path}")
     return checkpoint_reference
@@ -172,7 +201,7 @@ def print_summary(s):
 def main():
     args = parse_args()
 
-    checkpoint_reference = find_checkpoint(args.stock, args.id)
+    checkpoint_reference = find_checkpoint(args.stock, args.id, args.ckpt_path)
     print(f"checkpoint: {checkpoint_reference}")
 
     data_path = os.path.join(cst.DATA_DIR, args.stock, f"{args.split}.npy")
@@ -241,6 +270,29 @@ def main():
     print(f"\n=== OPEN-LOOP RESULTS: {tag} ===")
     for key in ("real", "generated_l1_decode", "generated_l2_decode", "generated_prior_decode"):
         print_summary(results[key])
+
+    if args.bucket_by_time:
+        # median split on the REAL conditioning time -- same split point applied to both real and
+        # generated arrays (they're paired, window-for-window) -- "early" vs "late" session.
+        median_t = float(np.median(real["time"]))
+        results["bucket_split_time"] = median_t
+        for bucket_name, mask_fn in (("early", lambda t: t <= median_t), ("late", lambda t: t > median_t)):
+            real_mask = mask_fn(real["time"])
+            gen_mask = mask_fn(gen["time"])
+            bucket_key = f"bucket_{bucket_name}"
+            results[bucket_key] = {
+                "real": summarize(f"REAL next-events ({bucket_name})", real["type"][real_mask],
+                                  real["size"][real_mask], real["depth"][real_mask],
+                                  real["time"][real_mask], real["direction"][real_mask]),
+                "generated_prior_decode": summarize(
+                    f"{tag} ({bucket_name}, prior decode)", gen["type_prior"][gen_mask],
+                    gen["size"][gen_mask], gen["depth"][gen_mask], gen["time"][gen_mask],
+                    gen["direction"][gen_mask]),
+            }
+        print(f"\n=== EARLY vs LATE SESSION (split at t={median_t:.4f}) ===")
+        for bucket_name in ("early", "late"):
+            for key in ("real", "generated_prior_decode"):
+                print_summary(results[f"bucket_{bucket_name}"][key])
 
     out = args.out or f"open_loop_{tag}.json"
     with open(out, "w") as f:
