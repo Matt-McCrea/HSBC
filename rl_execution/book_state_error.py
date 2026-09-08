@@ -26,6 +26,8 @@ Usage:
         --exchange-bz2 ABIDES/log/market_replay_INTC_2015-01-30_10-00-00_30/EXCHANGE_AGENT.bz2 \
         --out exp0_results/2015-01-30/30.csv
 """
+from __future__ import annotations  # remote box runs Python 3.9 -- `float | None` needs this to not crash at def-time
+
 import argparse
 import os
 import sys

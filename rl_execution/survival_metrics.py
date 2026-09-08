@@ -18,6 +18,8 @@ discard.
 Usage:
     python -m rl_execution.survival_metrics --gen <processed_orders.csv> --real <real-replay processed_orders.csv>
 """
+from __future__ import annotations  # remote box runs Python 3.9 -- `float | None` needs this to not crash at def-time
+
 import argparse
 import json
 

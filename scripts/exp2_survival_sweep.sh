@@ -84,12 +84,24 @@ run_variant () {  # run_variant <day> <seed> <reanchor_on:0|1>
   [[ -n "$CSV" && -f "$CSV" ]] || CSV=$(find ABIDES/log -name processed_orders.csv -newer "$S0" ! -path "*market_replay*" 2>/dev/null | sort | tail -1)
   rm -f "$S0"
   local SCORE_JSON="$OUT_DIR/logs/${TAG}.score.json"
+  local SCORE_OK=0
   if [[ -n "$CSV" && -f "$REALP" ]]; then
-    python -m rl_execution.survival_metrics --gen "$CSV" --real "$REALP" --out "$SCORE_JSON" \
-      >> "$OUT_DIR/logs/${TAG}.txt" 2>&1
+    if python -m rl_execution.survival_metrics --gen "$CSV" --real "$REALP" --out "$SCORE_JSON" \
+        >> "$OUT_DIR/logs/${TAG}.txt" 2>&1; then
+      SCORE_OK=1
+    fi
+  fi
+  # do NOT mark .done on a scoring failure -- the run itself succeeded (don't burn GPU time
+  # re-generating it), but leaving no .done means a rerun of this same command will retry ONLY
+  # the scoring step (CSV already exists, so no new ABIDES run happens) instead of silently
+  # reporting 0 scored runs at the very end of a multi-hour sweep.
+  if [[ "$SCORE_OK" -ne 1 ]]; then
+    echo "  SCORING FAILED (run itself succeeded, csv=${CSV:-none}) — see logs/${TAG}.txt"
+    echo "## $TAG  (${SECS}s)  -- RUN OK, SCORING FAILED, csv: ${CSV:-none}" >> "$SUM"
+    return
   fi
   { echo "## $TAG  (${SECS}s)"; echo '```'; echo "csv: ${CSV:-none}"
-    [[ -f "$SCORE_JSON" ]] && cat "$SCORE_JSON"
+    cat "$SCORE_JSON"
     echo '```'; echo ""; } >> "$SUM"
   touch "$DONE"; echo "  done ${SECS}s"
 }
