@@ -28,7 +28,12 @@ CKPT_PATH=""
 OUT_DIR="exp2_results/$(date +%Y%m%d_%H%M%S)"
 while [[ $# -gt 0 ]]; do case "$1" in
   --smoke) DAYS="20150130"; SEEDS="30 31"; ET="10:00:00"; REANCHOR="off"; shift;;
-  --pilot) DAYS="20150130 20150107 20150115"; SEEDS="30 31 32 33 34"; ET="11:30:00"; shift;;
+  # 30min horizon (measured ~37min/run on the GPU box, 2026-09-08) x 5 days x 3 seeds x 1 variant
+  # = 15 runs, ~9h -- resized after the original 2h-horizon pilot preset turned out to cost
+  # 150+ hours (measured >5h/run at 2h; cost scales worse than linearly with horizon). Breadth
+  # (days/seeds) over horizon length for this pass -- a longer-horizon spot-check is a separate,
+  # smaller follow-up once this confirms the failure pattern, not the first thing to run.
+  --pilot) DAYS="20150102 20150107 20150115 20150122 20150130"; SEEDS="30 31 32"; ET="10:00:00"; REANCHOR="off"; shift;;
   --days) DAYS="$2"; shift 2;; --seeds) SEEDS="$2"; shift 2;; --et) ET="$2"; shift 2;;
   --reanchor) REANCHOR="$2"; shift 2;; --ckpt-path) CKPT_PATH="$2"; shift 2;;
   --out-dir) OUT_DIR="$2"; shift 2;;
