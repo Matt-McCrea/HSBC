@@ -1,47 +1,57 @@
 #!/bin/bash
 # exp2_survival_sweep.sh — Experiment 2 (instability paper), the paper's headline evidence.
-# Runs DDPM-100 on the pinned "model under test" checkpoint (analysis/model_under_test.md --
-# THIS SCRIPT REFUSES TO RUN UNTIL THAT FILE'S "Confirmed checkpoint" SECTION IS FILLED IN),
-# NO decode-time flags, for every (day, seed, price-reanchor variant), for as long as practically
-# possible, and scores each run against the pre-registered freeze/diverge definitions in
-# rl_execution/survival_metrics.py. Single-GPU, strictly serial (see
+# Runs DDPM-100 on one checkpoint, NO decode-time flags, for every (day, seed), for as long as
+# practically possible, and scores each run against the pre-registered freeze/diverge definitions
+# in rl_execution/survival_metrics.py. Single-GPU, strictly serial (see
 # rl_execution/RUNBOOK_instability.md for the tmux layout this fits into).
 #
 # Resumable via .done sentinels. GPU REQUIRED (loads and samples the model) -- do not run this
 # locally, per this project's own convention (see rl_execution/train.py, evaluate.py, benchmark.py).
 #
-# The checkpoint does NOT need to be typed -- it's read automatically from the CKPT_PATH= line in
-# analysis/model_under_test.md, written by `bash scripts/exp1_pin_checkpoint.sh`. Pass --ckpt-path
-# only to override that.
+# The checkpoint does NOT need to be typed. Two ways to select it:
+#   --variant <baseline|reanchor|ss>   the normal path -- one of the three freshly-trained
+#     checkpoints from scripts/train_variant.sh, read from analysis/model_under_test.md, with
+#     price-reanchoring forced to match how THAT checkpoint was trained (never an independent
+#     free choice -- evaluating with a different reanchor state than training would be
+#     out-of-distribution for the model's own conditioning).
+#   (no --variant)   falls back to the single CKPT_PATH= entry from exp1_pin_checkpoint.sh.
+# --ckpt-path overrides either.
 #
-# THREE COMMANDS, IN THIS ORDER, EACH TAKING ZERO ARGUMENTS:
-#   bash scripts/exp2_survival_sweep.sh --smoke     # 1 day, 2 seeds, 30min  -- run this FIRST
-#   bash scripts/exp2_survival_sweep.sh --pilot      # 3 days, 5 seeds, 2h   -- run SECOND
-#   bash scripts/exp2_survival_sweep.sh              # full sweep -- only after --pilot looks right
+# THREE COMMANDS, IN THIS ORDER, EACH TAKING ONE ARGUMENT (the variant):
+#   bash scripts/exp2_survival_sweep.sh --smoke  --variant baseline   # 1 day, 2 seeds, 30min -- FIRST
+#   bash scripts/exp2_survival_sweep.sh --pilot  --variant baseline   # 5 days, 3 seeds, 30min -- SECOND
+#   bash scripts/exp2_survival_sweep.sh --variant baseline            # full sweep -- once --pilot looks right
+# (repeat all three for --variant reanchor and --variant ss)
 set -uo pipefail
+source "$(dirname "$0")/_ckpt_lib.sh"
 TICKER="INTC"; ST="09:30:00"; ET="13:30:00"   # ET default: 4h horizon, as long as practically possible
 DAYS="20150102 20150105 20150106 20150107 20150108 20150109 20150112 20150113 20150114 20150115 \
 20150116 20150120 20150121 20150122 20150123 20150126 20150127 20150128 20150129 20150130"
 SEEDS="30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49"  # 20 seeds default
-REANCHOR="both"   # on | off | both -- the price-reanchoring open question (see model_under_test.md)
-CKPT_PATH=""
-OUT_DIR="exp2_results/$(date +%Y%m%d_%H%M%S)"
+REANCHOR="off"   # on | off -- forced by --variant to match how that checkpoint was TRAINED
+CKPT_PATH=""; VARIANT=""
+OUT_DIR=""
 while [[ $# -gt 0 ]]; do case "$1" in
-  --smoke) DAYS="20150130"; SEEDS="30 31"; ET="10:00:00"; REANCHOR="off"; shift;;
-  # 30min horizon (measured ~37min/run on the GPU box, 2026-09-08) x 5 days x 3 seeds x 1 variant
+  --smoke) DAYS="20150130"; SEEDS="30 31"; ET="10:00:00"; shift;;
+  # 30min horizon (measured ~37min/run on the GPU box, 2026-09-08) x 5 days x 3 seeds
   # = 15 runs, ~9h -- resized after the original 2h-horizon pilot preset turned out to cost
   # 150+ hours (measured >5h/run at 2h; cost scales worse than linearly with horizon). Breadth
   # (days/seeds) over horizon length for this pass -- a longer-horizon spot-check is a separate,
   # smaller follow-up once this confirms the failure pattern, not the first thing to run.
-  --pilot) DAYS="20150102 20150107 20150115 20150122 20150130"; SEEDS="30 31 32"; ET="10:00:00"; REANCHOR="off"; shift;;
+  --pilot) DAYS="20150102 20150107 20150115 20150122 20150130"; SEEDS="30 31 32"; ET="10:00:00"; shift;;
   --days) DAYS="$2"; shift 2;; --seeds) SEEDS="$2"; shift 2;; --et) ET="$2"; shift 2;;
   --reanchor) REANCHOR="$2"; shift 2;; --ckpt-path) CKPT_PATH="$2"; shift 2;;
+  --variant) VARIANT="$2"; REANCHOR=$(reanchor_for_variant "$2"); shift 2;;
   --out-dir) OUT_DIR="$2"; shift 2;;
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
 
-source "$(dirname "$0")/_ckpt_lib.sh"
-CKPT_PATH=$(resolve_ckpt_path "$CKPT_PATH") || exit 1
+if [[ -n "$VARIANT" ]]; then
+  [[ -n "$CKPT_PATH" ]] || CKPT_PATH=$(resolve_ckpt_path_for_variant "$VARIANT") || exit 1
+else
+  CKPT_PATH=$(resolve_ckpt_path "$CKPT_PATH") || exit 1
+fi
 [[ -f "$CKPT_PATH" ]] || { echo "!! checkpoint not found: $CKPT_PATH"; exit 1; }
+[[ -n "$OUT_DIR" ]] || OUT_DIR="exp2_results/${VARIANT:-adhoc}_$(date +%Y%m%d_%H%M%S)"
 
 if pgrep -f "main.py" > /dev/null; then echo "!! training (main.py) running — kill it first (single GPU)."; exit 1; fi
 mkdir -p "$OUT_DIR/logs"; SUM="$OUT_DIR/summary.md"
@@ -111,10 +121,10 @@ run_variant () {  # run_variant <day> <seed> <reanchor_on:0|1>
   touch "$DONE"; echo "  done ${SECS}s"
 }
 
+RA_BIT=$([[ "$REANCHOR" == "on" ]] && echo 1 || echo 0)
 for D in $DAYS; do
   for S in $SEEDS; do
-    [[ "$REANCHOR" == "on" || "$REANCHOR" == "both" ]] && run_variant "$D" "$S" 1
-    [[ "$REANCHOR" == "off" || "$REANCHOR" == "both" ]] && run_variant "$D" "$S" 0
+    run_variant "$D" "$S" "$RA_BIT"
   done
 done
 

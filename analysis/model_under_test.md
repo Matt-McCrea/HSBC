@@ -64,35 +64,63 @@ picture:
   disk, possibly lost the same way `0.627` was — the recovery commit implies checkpoints have
   been lost to remote wipes before).
 
-## What Track B must do before Exp 2 can start (this is Track B's real "B(-1)")
+## 2026-09-08 — superseded: train fresh instead of hunting for pre-existing checkpoints
 
-1. On the remote GPU box: run `bash scripts/exp1_pin_checkpoint.sh`. It lists every checkpoint in
-   `data/checkpoints/TRADES/`, flags known decoys by name (0.627/0.681/0.719 pre-fix, 0.7_epoch
-   the documented fallback), and reports whether exactly one, zero, or more than one file matches
-   `val_ema=0.724*`. If more than one file could plausibly be the SS-resumed checkpoint sharing a
-   rounded val_ema with the plain baseline (the exact landmine in §1.4 below), do not guess —
-   resolve it (training log, mtime, whoever ran it) before filling in the section below. If
-   exactly one match: treat it as the model-under-test checkpoint (pending the vanilla DDPM-100
-   smoke test in B0) and skip to B0. **Every Track B script takes the exact file via
-   `--ckpt-path`, never a val_ema number via `--id`/`-id`** — `--id` matching is inherently
-   ambiguous when two checkpoints round to the same val_ema.
-2. If it is gone: retrain it. This is the safer option in general (forensic provenance from a
-   found file is unrecoverable per the table above), and cheap to get right this time — launch
-   training with `UNCLAMP_DEPTH_FLAG` present (and, for the PRICE_REANCHOR-on variant,
-   `PRICE_REANCHOR_FLAG` too — train the two variants as two separate runs, since this flag
-   affects *training* conditioning, not just simulate-time), `SCHEDULED_SAMPLING_FLAG` **absent**,
-   and **write the exact flag state and launch command into this file** (a `## Confirmed
-   checkpoint` section below) the moment training starts, before anything else — the entire
-   point of this document is to not repeat the provenance loss that produced this gap.
+Decided live, on the GPU box, after finding the `data/checkpoints/TRADES/` directory holds
+several pre-existing checkpoints (`0.69`, `0.7`, plus whatever else) with exactly the provenance
+problem this whole document warned about — none of them verifiably clean. Rather than forensically
+resolve an old file's history, **train three fresh checkpoints**, one per axis this paper needs to
+report on, each with its flag state logged automatically the moment it's produced:
 
-## Confirmed checkpoint
+| variant | `UNCLAMP_DEPTH` | `PRICE_REANCHOR` | `SCHEDULED_SAMPLING` |
+|---|---|---|---|
+| `baseline` | True | False | False |
+| `reanchor` | True | **True** | False |
+| `ss`       | True | False | **True** |
 
-**This section is written automatically by `bash scripts/exp1_pin_checkpoint.sh`** — the moment it
-finds exactly one unambiguous `val_ema=0.724*` file, it appends a `CKPT_PATH=...` line below and
-every other script reads it from here. Nothing needs to be typed or pasted by hand: `exp2`/`exp3`
-pick it up on their own when run with no `--ckpt-path` argument. Do not hand-edit the `CKPT_PATH=`
-line — rerun `exp1_pin_checkpoint.sh` instead, so this file and what actually ran always agree.
+Training cost is small for this model at this batch size — the original TRADES paper itself
+trained lightly, so stopping after **epoch 1, at most epoch 2** (~1.5h/epoch) is in keeping with
+that, not a shortcut. `scripts/train_variant.sh <variant>` enforces exactly this (via
+`MAX_EPOCHS_OVERRIDE=2`, `configuration.py`, so training stops cleanly at epoch 2 rather than
+being cut off by a wall-clock guess) and keeps every epoch's checkpoint
+(`KEEP_EPOCH_CHECKPOINTS_FLAG`) rather than only the best-by-val-loss one, since either epoch may
+be worth testing. `scripts/train_three_variants.sh` runs all three back to back, unattended
+(~5h safety cap each, ~15h total) — see `rl_execution/RUNBOOK_instability.md`.
 
-*(empty until `exp1_pin_checkpoint.sh` finds an unambiguous match on the box that actually has the
-checkpoint — this local test machine doesn't, so this stays empty here; that test run's dummy
-0.724 file has been deleted)*
+**Collision note:** all three variants share identical seed/hyperparameters, so an epoch-1
+checkpoint from two variants could round to the *same filename* in the shared
+`data/checkpoints/TRADES/` directory. `train_variant.sh` moves every checkpoint it produces into
+its own `data/checkpoints/TRADES_<variant>/` the moment training stops, before the next variant
+can start and risk overwriting it.
+
+**Price re-anchoring is no longer an independent per-run choice** (the "run both ways" idea from
+2026-09-07 below assumed one checkpoint being evaluated both ways at simulate time only — but
+`PRICE_REANCHOR` also changes *training* conditioning, so a checkpoint trained without it and
+simulated with it would be out-of-distribution, not a real "both ways" test). The `reanchor`
+variant is trained with it on; `exp2_survival_sweep.sh --variant reanchor` and
+`exp3_teacher_forced.sh --variant reanchor` force the matching simulate-time state automatically.
+
+## Confirmed checkpoints
+
+**Written automatically by `bash scripts/pin_trained_variant.sh <variant>`**, called by
+`train_three_variants.sh` right after each training run — one `CKPT_PATH_<VARIANT>=` line per
+variant, below. `exp2`/`exp3` read the right one via `--variant baseline|reanchor|ss`. Do not
+hand-edit these lines — rerun `pin_trained_variant.sh` instead.
+
+*(empty until training finishes on the box that's actually running it)*
+
+---
+
+## Superseded: the original pre-existing-checkpoint hunt (2026-09-07)
+
+*Kept for the record, not acted on further — see the 2026-09-08 section above for what actually
+happened. `scripts/exp1_pin_checkpoint.sh` and its `CKPT_PATH=` (no suffix) convention still work
+as a fallback path if a specific pre-existing checkpoint's provenance is ever pinned down by other
+means, but the plan going forward is the three trained variants above.*
+
+**Only one checkpoint has ever been committed to this repo, on any branch:**
+`data/checkpoints/TRADES/val_ema=0.7_epoch=2_INTC_se_256_au_64_CD_8_seed_30.ckpt`. Its own commit
+message (`b0f449c`, 2026-07-27) says explicitly: "Not the 0.627 winner ... but a usable checkpoint
+to test stability / resume from." `analysis/MASTER_RESULTS.md` (on `origin/main`, not this branch)
+names `0.724` as the Phase-2 baseline and `0.627`/`0.681`/`0.719` as pre-fix — none of these were
+ever confirmed present with verifiable provenance on the actual GPU box.

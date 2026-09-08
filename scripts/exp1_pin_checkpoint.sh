@@ -67,11 +67,18 @@ if [[ "$N_MATCHES" -eq 1 ]]; then
 import re, sys
 path, doc = sys.argv[1], "analysis/model_under_test.md"
 text = open(doc).read()
-block = ("## Confirmed checkpoint\n\n"
-         "**Written automatically by exp1_pin_checkpoint.sh — do not hand-edit.**\n\n"
-         f"CKPT_PATH={path}\n")
-text = re.sub(r"## Confirmed checkpoint\n.*", block, text, flags=re.S) if "## Confirmed checkpoint" in text \
-    else text.rstrip("\n") + "\n\n" + block
+line = f"CKPT_PATH={path}"
+
+# Scoped insert -- this doc has a "Superseded" section AFTER the "Confirmed checkpoints" heading,
+# so anything DOTALL/"append to end" would silently eat it. Only ever touch the CKPT_PATH= line
+# itself, never a whole-section replace.
+own_line = re.compile(r"^CKPT_PATH=.*$", re.M)
+if own_line.search(text):
+    text = own_line.sub(line, text)
+elif "## Confirmed checkpoints" in text:
+    text = text.replace("## Confirmed checkpoints\n", "## Confirmed checkpoints\n\n" + line + "\n", 1)
+else:
+    text = text.rstrip("\n") + "\n\n## Confirmed checkpoints\n\n" + line + "\n"
 open(doc, "w").write(text)
 print(f"  wrote CKPT_PATH={path} into {doc} -- nothing left to type by hand.")
 PY

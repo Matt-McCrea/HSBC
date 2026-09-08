@@ -1,6 +1,29 @@
+import os
+
 from constants import LearningHyperParameter, LearningHyperParameter
 import constants as cst
 from utils.utils import noise_scheduler
+
+
+def _epochs_override(default=50):
+    # MAX_EPOCHS_OVERRIDE file, one integer -- same file-flag convention as UNCLAMP_DEPTH_FLAG etc.
+    # (env vars have silently failed to propagate on this remote before; see constants.py). Lets a
+    # short training run (e.g. "stop after epoch 1-2, matching the original TRADES paper's own
+    # light training regime") be capped via Lightning's own max_epochs instead of a wall-clock
+    # guess that either wastes GPU time past the wanted epoch or cuts off mid-epoch.
+    path = "MAX_EPOCHS_OVERRIDE"
+    if os.path.exists(path):
+        try:
+            return int(open(path).read().strip())
+        except (ValueError, OSError):
+            pass
+    env = os.environ.get("MAX_EPOCHS_OVERRIDE")
+    if env:
+        try:
+            return int(env)
+        except ValueError:
+            pass
+    return default
 
 
 class Configuration:
@@ -49,7 +72,7 @@ class Configuration:
         self.HYPER_PARAMETERS[LearningHyperParameter.BATCH_SIZE] = 256
         self.HYPER_PARAMETERS[LearningHyperParameter.TEST_BATCH_SIZE] = 512
         self.HYPER_PARAMETERS[LearningHyperParameter.LEARNING_RATE] = 0.00025
-        self.HYPER_PARAMETERS[LearningHyperParameter.EPOCHS] = 50
+        self.HYPER_PARAMETERS[LearningHyperParameter.EPOCHS] = _epochs_override()
         self.HYPER_PARAMETERS[LearningHyperParameter.OPTIMIZER] = cst.Optimizers.ADAM.value
         self.HYPER_PARAMETERS[LearningHyperParameter.DDIM_ETA] = 0
         self.HYPER_PARAMETERS[LearningHyperParameter.DDIM_NSTEPS] = 10
