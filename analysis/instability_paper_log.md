@@ -4,6 +4,44 @@
 See `/Users/Matthew/.claude/plans/moonlit-leaping-hamming.md` for the execution plan this log
 tracks (Track A = local/CPU, Experiments 0/1/5; Track B = remote/GPU, Experiments 2/3/4).*
 
+## 2026-09-08/09/10 — Trained three fresh checkpoints; first real Exp 2 signal at 90-min horizon
+
+Trained `baseline`/`reanchor`/`ss` per `analysis/model_under_test.md`'s superseded-plan section
+(`scripts/train_three_variants.sh`, unattended, ~5h cap each). `baseline` and `reanchor` reached
+epoch 1 (val_ema 0.702, 0.704); `ss` reached only epoch 0 (val_ema 0.757) before its cap — scheduled
+sampling's extra rollout sampling during training makes it slower per epoch, and epoch 0 is still
+within the "epoch 1 at most epoch 2" (1-indexed) target, so used as-is.
+
+30-min smoke test (`--smoke`) on `baseline`: both seeds survived cleanly, ~2230s/run. Expected —
+prior knowledge (stated by the user, matches the dissertation's own findings) is that instability
+onset is characteristically past the 1-hour mark, so a 30-min window mostly tests "does it survive
+30 min," not the phenomenon this paper is about. Cost model confirmed from a real 90-min data point
+(10875s) against the 30-min number (2200s): cost scales as roughly `horizon^1.5`, not linearly —
+a 90-min run costs ~3h, not the ~3x-of-30min a linear guess would predict.
+
+**One 90-minute validation run per variant** (day 2015-01-30, seed 30, no day/seed sweep yet —
+n=1 each, a qualitative check that the phenomenon replicates on these freshly-trained checkpoints
+before spending more budget on a full grid):
+
+| variant | outcome | time | mechanism |
+|---|---|---|---|
+| `baseline` | failed | 78.4 min (froze, then diverged 25s later) | freeze → price_departure |
+| `reanchor` | failed | **50 min — earliest of the three** | price_departure directly, no freeze first |
+| `ss` | failed | 65 min | froze, never diverged by end of window |
+
+All three fail within the 90-minute window, confirming the instability is not specific to one
+checkpoint or one training configuration. **`reanchor` failing earliest, and via a different
+mechanism (direct divergence, not freeze-then-diverge), is a genuine early answer to the paper's
+open question about price re-anchoring** — the flag was introduced specifically to fix an
+out-of-distribution price-drift problem, so failing *faster* than the plain baseline is
+counter to the naive expectation and worth leading with, not burying. `ss` still failing (at
+epoch 0 only) is worth reporting honestly rather than treated as refuting the fix, given how
+little training it received relative to the other two.
+
+Each 90-min run costs ~3h wall-clock on this box — n=1/variant only, not yet a statistically
+sized sample. Next step (budget permitting): more days/seeds per variant at this same ~90-min
+horizon, prioritizing `baseline` first since it's the paper's primary claim.
+
 ## 2026-09-07 — Track A build + Exp 0 kickoff
 
 Built `rl_execution/book_state_error.py` (the Exp-0 core measurement) and
