@@ -69,6 +69,57 @@ for the closed-loop failures independent of exposure bias: over-aggressive order
 through the book faster than reality. Worth reporting regardless of how the (buggy, not yet fixed)
 early/late comparison turns out.
 
+## 2026-09-11 — Session ended: full Exp 2 table to date, and what's still open
+
+GPU session ended (multi-day access, not indefinite — see 2026-09-08 entry). Consolidating
+everything scored so far before the gap, so the next session picks up cleanly rather than
+reconstructing it.
+
+**Every scored Exp 2 result to date** (90-min horizon unless noted; `.score.json` under each
+`exp2_results/*/logs/`):
+
+| variant | day | outcome | time to fail |
+|---|---|---|---|
+| baseline | 2015-01-30 (30min) | survived | — |
+| baseline | 2015-01-30 (30min) | survived | — |
+| baseline | 2015-01-30 | froze → diverged (price_departure) | 78.0 min → 78.4 min |
+| baseline | 2015-01-07 | froze, no diverge | 88.4 min |
+| baseline | 2015-01-22 | froze, no diverge | 21.2 min |
+| reanchor | 2015-01-30 | diverged directly (price_departure), no freeze first | 50.1 min |
+| reanchor | 2015-01-15 | froze, no diverge | 24.1 min* |
+| ss | 2015-01-30 | froze, no diverge | 65.5 min |
+| ss | 2015-01-15 | froze, no diverge | 24.1 min* |
+
+**Headline: 0/7 runs survived a 90-minute horizon**, across all three variants and four different
+days — confirms the >1h instability at real scale, not one cherry-picked day/checkpoint. Failure
+timing spans 21–88 min: real day-to-day variance, not a fixed clock.
+
+*`reanchor` and `ss` froze at the EXACT same microsecond timestamp (09:54:08.032466001) on
+2015-01-15 — two independent checkpoints can't coincide by chance, so this is almost certainly the
+shared real-data warm-up period's last price move (both runs condition on identical real history
+before generation takes over), with both models freezing effectively immediately once generation
+starts on that particular day. The 24.1min figure likely understates how early the failure really
+begins on that day — flag as a caveat if it goes in the writeup, don't cite as a precise number.
+
+**Also open**: the pooled Exp 3 finding (all three variants generate marketable/negative-depth
+orders at ~43x the real rate, even teacher-forced — see the 2026-09-11 entry below) stands, but
+the early-vs-late bucketing bug fix (`evaluation/diagnostics/open_loop_eval.py`, pushed) has not
+yet been rerun — `bash scripts/rerun_exp3_fixed.sh` is ready to go, just needs a GPU session.
+
+**What's still open for the next session, roughly in priority order:**
+1. `bash scripts/rerun_exp3_fixed.sh` — cheap, rerun with the bucketing fix, get the real
+   early-vs-late comparison.
+2. More Exp 2 days/seeds per variant — 7 scored runs is a strong qualitative signal but not yet a
+   statistically sized survival curve. `baseline` has 3 (90-min) + 2 (30-min); `reanchor`/`ss`
+   have 2 each. Priority: more `baseline` days (primary claim), then even out `reanchor`/`ss`.
+3. Experiment 4 (`exp4_checkpoint_sweep.sh --ckpt-dir data/checkpoints/TRADES_baseline`) — not
+   started yet; checkpoint-epoch robustness within a variant.
+4. Experiment 0's full sweep status on the remote is unconfirmed — check
+   `exp0_results/*/summary.md` for how far it got (it was launched with `--max-mem-gb`, sized to
+   this box's free RAM, per `rl_execution/RUNBOOK_instability.md`'s `exp0-cpu` window).
+5. Experiment 5 (TRADES-LOB check) — not started; still needs the released dataset pulled from
+   the Google Drive folder in `READMEFORMEHMET.md` onto this box.
+
 ## 2026-09-07 — Track A build + Exp 0 kickoff
 
 Built `rl_execution/book_state_error.py` (the Exp-0 core measurement) and
