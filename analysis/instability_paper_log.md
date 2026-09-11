@@ -42,6 +42,33 @@ Each 90-min run costs ~3h wall-clock on this box — n=1/variant only, not yet a
 sized sample. Next step (budget permitting): more days/seeds per variant at this same ~90-min
 horizon, prioritizing `baseline` first since it's the paper's primary claim.
 
+## 2026-09-11 — Exp 3 (teacher-forced) run for all three variants; caught a real bucketing bug
+
+`overnight_batch.sh` produced Exp 3 (`open_loop_eval.py --bucket-by-time`) results for all three
+variants. Caught a bug in the `--bucket-by-time` patch before trusting it: the "time" field
+decoded from the model/dataset is the inter-arrival DELTA to the previous event (`utils_data.py`
+diffs it during preprocessing), not session clock time — so the "early vs late session" median
+split was actually splitting on delta magnitude, unrelated to session position (tell: all three
+runs' `bucket_split_time` was ~5e-5, an interarrival-gap-sized number, not a plausible session
+timestamp). Fixed in `evaluation/diagnostics/open_loop_eval.py` to split on the sampled windows'
+dataset INDEX instead (chronologically ordered, aligned 1:1 with the result arrays) — pushed, not
+yet rerun. **Do not cite the bucket_early/bucket_late numbers from the first three Exp 3 JSON
+files** — only the pooled (non-bucketed) numbers in those files are valid.
+
+**Valid, striking finding from the pooled numbers** (unaffected by the bucketing bug): all three
+variants generate marketable (spread-crossing, negative-depth) orders at roughly **43x the real
+rate**, even under teacher forcing with perfect real conditioning history —
+
+| | real | baseline | reanchor | ss |
+|---|---|---|---|---|
+| marketable order share | 0.56% | 24.4% | 24.3% | 23.7% |
+
+This is present from the very first generation step, consistently across all three training
+variants — not something that only emerges as self-generated error compounds. Plausible mechanism
+for the closed-loop failures independent of exposure bias: over-aggressive order flow eating
+through the book faster than reality. Worth reporting regardless of how the (buggy, not yet fixed)
+early/late comparison turns out.
+
 ## 2026-09-07 — Track A build + Exp 0 kickoff
 
 Built `rl_execution/book_state_error.py` (the Exp-0 core measurement) and
