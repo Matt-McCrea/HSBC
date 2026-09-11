@@ -272,13 +272,19 @@ def main():
         print_summary(results[key])
 
     if args.bucket_by_time:
-        # median split on the REAL conditioning time -- same split point applied to both real and
-        # generated arrays (they're paired, window-for-window) -- "early" vs "late" session.
-        median_t = float(np.median(real["time"]))
-        results["bucket_split_time"] = median_t
-        for bucket_name, mask_fn in (("early", lambda t: t <= median_t), ("late", lambda t: t > median_t)):
-            real_mask = mask_fn(real["time"])
-            gen_mask = mask_fn(gen["time"])
+        # median split on dataset INDEX (chronological position within the -- possibly
+        # multi-day -- time-ordered test split), NOT on the "time" feature: that field is the
+        # inter-arrival DELTA to the previous event (utils_data.py diffs it during preprocessing),
+        # not session clock time, so splitting on its value does not separate early from late
+        # session at all. `indices` is evenly spaced across the dataset in chronological order and
+        # aligned 1:1 with the concatenated gen/real arrays (batches processed in order), so its
+        # own median is the correct early/late cutoff.
+        median_idx = float(np.median(indices))
+        results["bucket_split_index"] = median_idx
+        results["bucket_split_index_of"] = int(n_avail)
+        for bucket_name, mask_fn in (("early", lambda i: i <= median_idx), ("late", lambda i: i > median_idx)):
+            real_mask = mask_fn(indices)
+            gen_mask = mask_fn(indices)
             bucket_key = f"bucket_{bucket_name}"
             results[bucket_key] = {
                 "real": summarize(f"REAL next-events ({bucket_name})", real["type"][real_mask],
@@ -289,7 +295,7 @@ def main():
                     gen["size"][gen_mask], gen["depth"][gen_mask], gen["time"][gen_mask],
                     gen["direction"][gen_mask]),
             }
-        print(f"\n=== EARLY vs LATE SESSION (split at t={median_t:.4f}) ===")
+        print(f"\n=== EARLY vs LATE SESSION (split at dataset index {median_idx:.0f} of {n_avail}) ===")
         for bucket_name in ("early", "late"):
             for key in ("real", "generated_prior_decode"):
                 print_summary(results[f"bucket_{bucket_name}"][key])
