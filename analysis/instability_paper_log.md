@@ -69,6 +69,23 @@ for the closed-loop failures independent of exposure bias: over-aggressive order
 through the book faster than reality. Worth reporting regardless of how the (buggy, not yet fixed)
 early/late comparison turns out.
 
+## 2026-09-18 — Exp 3 rerun (fixed bucketing): confirms compounding self-generated error, not a late-session blind spot
+
+`scripts/rerun_exp3_fixed.sh` results for all three variants, now correctly split early/late by
+dataset index. Marketable-order rate (the ~40x-real-rate finding from 2026-09-11) is flat from
+early to late session in every variant under teacher forcing: baseline 25.3%→25.8%, reanchor
+21.6%→23.7%, ss 22.5%→23.1% (real: 0.6%→0.5%). Market-order type share and the rest of the
+type/depth histograms move similarly little.
+
+**This is the confirmatory result Experiment 3 was designed to produce.** Per-step prediction
+quality does not degrade over the session when the model is always shown real history — so Exp 2's
+consistent within-90-minute closed-loop failures are not explained by the model simply getting
+worse at modelling later parts of the trading day. The failure is specific to the closed loop:
+conditioning on the model's own drifting output, not a generic capability gap. Combined with the
+marketable-order-excess finding, the mechanism story is now: a baseline miscalibration (~40x too
+many spread-crossing orders, present from the very first generated step, not worsening with
+exposure) becomes catastrophic specifically once the model starts feeding on its own output.
+
 ## 2026-09-11 — Session ended: full Exp 2 table to date, and what's still open
 
 GPU session ended (multi-day access, not indefinite — see 2026-09-08 entry). Consolidating
