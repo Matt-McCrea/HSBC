@@ -69,6 +69,17 @@ for the closed-loop failures independent of exposure bias: over-aggressive order
 through the book faster than reality. Worth reporting regardless of how the (buggy, not yet fixed)
 early/late comparison turns out.
 
+## 2026-09-20 — Exp 0 and Exp 4 launched, in progress at session's end
+
+Exp 0 had never actually run on this box (CPU-only, no GPU contention) — launched via
+`nohup bash scripts/exp0_abides_replay_error.sh --max-mem-gb N > exp0_run.log 2>&1 &` alongside
+Exp 4 (`bash scripts/exp4_checkpoint_sweep.sh --ckpt-dir data/checkpoints/TRADES_baseline --day
+20150102 --seeds 30 --et 11:00:00`, testing `baseline`'s epoch=0 vs epoch=1 checkpoints on a day
+already covered in Exp 2). Session expected to end before either finishes — both are resumable
+(`.done` sentinels), so rerunning the exact same commands next session continues rather than
+restarts. No results yet as of this entry — check `exp0_results/*/summary.md` and
+`exp4_results/*/summary.md` first thing next time.
+
 ## 2026-09-19 — Four more Exp 2 spot-checks: reanchor and ss consistently fail earlier than baseline
 
 `batch_12h.sh` added: baseline 2015-01-02 (froze 62.2min), baseline 2015-01-09 (froze 61.5min),
