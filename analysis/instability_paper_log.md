@@ -69,6 +69,37 @@ for the closed-loop failures independent of exposure bias: over-aggressive order
 through the book faster than reality. Worth reporting regardless of how the (buggy, not yet fixed)
 early/late comparison turns out.
 
+## 2026-09-19 — Four more Exp 2 spot-checks: reanchor and ss consistently fail earlier than baseline
+
+`batch_12h.sh` added: baseline 2015-01-02 (froze 62.2min), baseline 2015-01-09 (froze 61.5min),
+reanchor 2015-01-16 (froze 20.7min), ss 2015-01-23 (froze 16.2min — earliest yet). All four froze,
+none diverged. **11/11 scored 90-min runs have now failed, 0% survival, across every variant and
+every day tested.**
+
+Per-variant time-to-failure so far (minutes, freeze or diverge, whichever came first):
+
+| variant | days tested | times | median |
+|---|---|---|---|
+| baseline | 5 | 21.2, 61.5, 62.2, 78.0, 88.4 | **62.2** |
+| reanchor | 3 | 20.7, 24.1*, 50.1 | **24.1** |
+| ss | 3 | 16.2, 24.1*, 65.5 | **24.1** |
+
+(*reanchor/ss's 24.1min entries are the same 2015-01-15 day flagged 2026-09-11 as a likely shared
+warm-up artifact — both may fail earlier than 24.1min in reality.)
+
+Small n, but a consistent pattern across two independent runs of new days each: **both `reanchor`
+and `ss` fail earlier (median ~24min) than `baseline` (median ~62min)**, not later. Combined with
+the 2026-09-09 finding that `reanchor` diverges via a different mechanism (direct price departure,
+not freeze-first) on 2015-01-30, this is now two separate lines of evidence pointing the same
+way: neither price re-anchoring nor the scheduled-sampling/teacher-forcing fix delays instability
+onset relative to the plain baseline — if anything, both make it worse. Worth leading with this in
+the writeup rather than treating it as a footnote.
+
+Also noted: these four runs took 16064-16814s each at the SAME 90-min horizon that took ~10875s
+in the 2026-09-09/10 runs — roughly 50% slower. Likely GPU contention on a shared box rather than
+a property of the model; flagging in case it matters for future budget math, not investigating
+further right now.
+
 ## 2026-09-18 — Exp 3 rerun (fixed bucketing): confirms compounding self-generated error, not a late-session blind spot
 
 `scripts/rerun_exp3_fixed.sh` results for all three variants, now correctly split early/late by
