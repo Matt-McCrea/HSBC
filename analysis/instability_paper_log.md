@@ -69,6 +69,50 @@ for the closed-loop failures independent of exposure bias: over-aggressive order
 through the book faster than reality. Worth reporting regardless of how the (buggy, not yet fixed)
 early/late comparison turns out.
 
+## 2026-09-21 — Exp 0 finished (headline confirmed); Exp 4 surfaces a real non-determinism finding
+
+**Exp 0 completed** for all 20 INTC days, most at all 7 lengths (30/60/90/120/180/240/390 min) —
+131 of 140 day×length combos scored; the missing 9 are all at 390min (`20150106`, `20150112`,
+`20150113`, `20150114`, `20150115`, `20150116`, `20150127`, `20150128`, `20150130` — either "real
+replay failed" or "book_state_error.py failed", not investigated further, doesn't threaten the
+headline given 131/140 succeeded including 11/20 days' full 390min cells).
+
+**Headline, confirmed at full scale: `one_sided_ever=False` on EVERY single combo — real order
+flow through ABIDES never once produces an unquoted/one-sided book**, from 30 minutes up to a full
+6.5-hour session, on any of the 20 days. This is the load-bearing number the whole plan was gated
+on (see 2026-09-07): the one-sided-book pathology seen in the generative model's closed-loop runs
+does NOT reproduce on real flow through the same engine — consistent with it belonging to the
+model, not ABIDES.
+
+The `shares_missing` leak (ABIDES retaining more resting inventory than raw-LOBSTER ground truth)
+IS real and grows with session length in every single day tested (e.g. 2015-01-02: -62,517 at
+30min → -704,400 at 390min) — this is NOT the flat/bounded outcome the plan's decision framework
+anticipated, but it's also not the runaway-into-one-sided-collapse outcome that would force adding
+an ABIDES-baseline control to Exp 2's own numbers. It's a real, honest limitation to report (ABIDES
+has a growing bookkeeping bias on real flow) that sits alongside, not underneath, the model's
+instability finding — the two are separable because the specific pathology (one side draining to
+zero) only ever appears in generated runs. `depth_error` (top-10-level only) stays comparatively
+small and mixed-sign throughout, suggesting the "leaked" inventory sits away from the touch, not
+concentrated at best bid/ask — plausibly why it never manifests as a one-sided top-of-book.
+
+**Exp 4** (`baseline`'s two checkpoints, epoch=0 val_ema=0.723 and epoch=1 val_ema=0.702, on
+2015-01-02): both failed within the 90-min window (froze at 88.2min and 25.3min respectively) —
+another data point that instability isn't specific to one epoch. **But the epoch=1 result here
+(froze 25.3min) directly contradicts the 2026-09-19 batch_12h.sh run of the IDENTICAL config**
+(same checkpoint file, same day, same seed=30, same 90-min window), which froze at **62.2min** —
+different `n_rows` too (86456 vs 86487), confirming genuinely different generated sequences, not a
+scoring artifact. Checked the code: `torch.manual_seed(seed)` is called
+(`ABIDES/config/world_agent_sim.py:231`), but `main.py`'s `set_torch()` enables
+`cudnn.allow_tf32`/`cuda.matmul.allow_tf32` with no `cudnn.deterministic` or
+`use_deterministic_algorithms` set — the standard cause of GPU non-reproducibility: tiny
+floating-point differences from TF32/cudnn kernel selection, compounded over 100 diffusion steps x
+tens of thousands of sequential orders, diverging into different trajectories despite an identical
+seed. **Caveat for the writeup: "seed 30" does not identify a reproducible run on this hardware/
+software stack — describe repeated runs as independent stochastic draws, not as a specific
+reproducible seed.** Silver lining: every nominally-repeated (checkpoint, day, seed) combo run so
+far is actually an independent additional data point, not a duplicate — the effective sample size
+across all of Exp 2/4 is larger than the seed-count alone would suggest.
+
 ## 2026-09-20 — Exp 0 and Exp 4 launched, in progress at session's end
 
 Exp 0 had never actually run on this box (CPU-only, no GPU contention) — launched via
