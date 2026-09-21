@@ -21,6 +21,7 @@
 # Usage:  bash scripts/exp0_abides_replay_error.sh
 #         bash scripts/exp0_abides_replay_error.sh --days "20150130 20150107" --lengths "30 60"
 #         bash scripts/exp0_abides_replay_error.sh --max-mem-gb 48   # bigger box, full 390min sweep
+#         bash scripts/exp0_abides_replay_error.sh --ticker TSLA --lob-dir data/TSLA/<dir> --days "..."
 set -uo pipefail
 TICKER="INTC"; ST="09:30:00"; SEED="30"; MAX_MEM_GB=16
 LOB_DIR="data/INTC/INTC_2015-01-02_2015-01-30"
@@ -32,7 +33,13 @@ OUT_DIR="exp0_results/$(date +%Y%m%d_%H%M%S)"
 while [[ $# -gt 0 ]]; do case "$1" in
   --days) DAYS="$2"; shift 2;; --lengths) LENGTHS="$2"; shift 2;; --out-dir) OUT_DIR="$2"; shift 2;;
   --lob-dir) LOB_DIR="$2"; shift 2;; --max-mem-gb) MAX_MEM_GB="$2"; shift 2;;
+  --ticker) TICKER="$2"; shift 2;;
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
+if [[ "$TICKER" != "INTC" && "$LOB_DIR" == "data/INTC/INTC_2015-01-02_2015-01-30" ]]; then
+  echo "!! --ticker $TICKER given but --lob-dir still points at the INTC default -- pass --lob-dir" >&2
+  echo "!! explicitly (e.g. --lob-dir data/TSLA/TSLA_<first-day>_<last-day>)." >&2
+  exit 1
+fi
 echo "memory cap per run: ${MAX_MEM_GB}GB (ulimit -v) -- raise with --max-mem-gb if this box has more headroom"
 mkdir -p "$OUT_DIR/logs"; SUM="$OUT_DIR/summary.md"
 echo "# Experiment 0 — ABIDES real-flow book-state error — $(date '+%F %T')" > "$SUM"
@@ -43,7 +50,11 @@ etdash () { echo "${1//:/-}"; }
 et_for_length () {  # minutes from 09:30 -> HH:MM:SS clock time
   python3 -c "print((__import__('datetime').datetime(2000,1,1,9,30)+__import__('datetime').timedelta(minutes=$1)).strftime('%H:%M:%S'))"
 }
-message_csv_for () { echo "$LOB_DIR/${TICKER}_$(ymd_dash "$1")_34140000_57660000_message_10.csv"; }
+message_csv_for () {  # globs the ms-since-midnight bounds -- LOBSTER's own per-file values,
+  # confirmed to vary (not guaranteed identical across stocks/days), so don't hardcode them.
+  local F; F=$(ls "$LOB_DIR/${TICKER}_$(ymd_dash "$1")"_*_message_10.csv 2>/dev/null | head -1)
+  echo "${F:-$LOB_DIR/${TICKER}_$(ymd_dash "$1")_MISSING_message_10.csv}"
+}
 
 real_dir_for () { echo "ABIDES/log/market_replay_${TICKER}_$(ymd_dash "$1")_$(etdash "$2")_${SEED}"; }
 ensure_real_run () {  # ensure_real_run <day> <et> -> prints the run's log dir

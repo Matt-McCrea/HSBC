@@ -26,6 +26,21 @@ def _epochs_override(default=50):
     return default
 
 
+def _stock_override(default):
+    # STOCK_OVERRIDE file, one Stocks enum name (e.g. "TSLA") -- same file-flag convention as
+    # MAX_EPOCHS_OVERRIDE/UNCLAMP_DEPTH_FLAG. Lets a training run target a different stock without
+    # permanently changing this file's hardcoded default (which every INTC run still relies on).
+    for source in (lambda: open("STOCK_OVERRIDE").read().strip() if os.path.exists("STOCK_OVERRIDE") else None,
+                   lambda: os.environ.get("STOCK_OVERRIDE")):
+        name = source()
+        if name:
+            try:
+                return cst.Stocks[name.strip().upper()]
+            except KeyError:
+                pass
+    return default
+
+
 class Configuration:
 
     def __init__(self):
@@ -52,8 +67,8 @@ class Configuration:
         if self.CHOSEN_MODEL == cst.Models.CGAN:
             cst.PROJECT_NAME = "CGAN"
 
-        # select a stock 
-        self.CHOSEN_STOCK = [cst.Stocks.INTC]
+        # select a stock
+        self.CHOSEN_STOCK = [_stock_override(cst.Stocks.INTC)]
 
         self.WANDB_INSTANCE = None
         self.WANDB_RUN_NAME = None

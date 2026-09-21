@@ -30,18 +30,18 @@ DAYS="20150102 20150105 20150106 20150107 20150108 20150109 20150112 20150113 20
 SEEDS="30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49"  # 20 seeds default
 REANCHOR="off"   # on | off -- forced by --variant to match how that checkpoint was TRAINED
 CKPT_PATH=""; VARIANT=""
-OUT_DIR=""
+OUT_DIR=""; DAYS_EXPLICIT=0
 while [[ $# -gt 0 ]]; do case "$1" in
-  --smoke) DAYS="20150130"; SEEDS="30 31"; ET="10:00:00"; shift;;
+  --smoke) DAYS="20150130"; SEEDS="30 31"; ET="10:00:00"; DAYS_EXPLICIT=1; shift;;
   # 30min horizon (measured ~37min/run on the GPU box, 2026-09-08) x 5 days x 3 seeds
   # = 15 runs, ~9h -- resized after the original 2h-horizon pilot preset turned out to cost
   # 150+ hours (measured >5h/run at 2h; cost scales worse than linearly with horizon). Breadth
   # (days/seeds) over horizon length for this pass -- a longer-horizon spot-check is a separate,
   # smaller follow-up once this confirms the failure pattern, not the first thing to run.
-  --pilot) DAYS="20150102 20150107 20150115 20150122 20150130"; SEEDS="30 31 32"; ET="10:00:00"; shift;;
-  --days) DAYS="$2"; shift 2;; --seeds) SEEDS="$2"; shift 2;; --et) ET="$2"; shift 2;;
+  --pilot) DAYS="20150102 20150107 20150115 20150122 20150130"; SEEDS="30 31 32"; ET="10:00:00"; DAYS_EXPLICIT=1; shift;;
+  --days) DAYS="$2"; DAYS_EXPLICIT=1; shift 2;; --seeds) SEEDS="$2"; shift 2;; --et) ET="$2"; shift 2;;
   --reanchor) REANCHOR="$2"; shift 2;; --ckpt-path) CKPT_PATH="$2"; shift 2;;
-  --variant) VARIANT="$2"; REANCHOR=$(reanchor_for_variant "$2"); shift 2;;
+  --variant) VARIANT="$2"; REANCHOR=$(reanchor_for_variant "$2"); TICKER=$(ticker_for_variant "$2"); shift 2;;
   --out-dir) OUT_DIR="$2"; shift 2;;
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
 
@@ -51,6 +51,11 @@ else
   CKPT_PATH=$(resolve_ckpt_path "$CKPT_PATH") || exit 1
 fi
 [[ -f "$CKPT_PATH" ]] || { echo "!! checkpoint not found: $CKPT_PATH"; exit 1; }
+if [[ "$TICKER" == "TSLA" && "$DAYS_EXPLICIT" -eq 0 ]]; then
+  echo "!! TSLA has no default day list here (INTC's 20-day default doesn't apply) -- pass" >&2
+  echo "!! --days explicitly, e.g. --days \"20150102 20150105\" (check data/TSLA/ for what's there)." >&2
+  exit 1
+fi
 [[ -n "$OUT_DIR" ]] || OUT_DIR="exp2_results/${VARIANT:-adhoc}_$(date +%Y%m%d_%H%M%S)"
 
 if pgrep -f "main.py" > /dev/null; then echo "!! training (main.py) running — kill it first (single GPU)."; exit 1; fi

@@ -28,12 +28,20 @@ resolve_ckpt_path_for_variant () {  # resolve_ckpt_path_for_variant <baseline|re
   echo "${LINE#CKPT_PATH_${VAR_UPPER}=}"
 }
 
-# reanchor_for_variant <baseline|reanchor|ss> -- the price-reanchoring flag state a checkpoint was
-# TRAINED with; simulating with a different state than training would evaluate the model
-# out-of-distribution on its own conditioning, so this is not an independent free choice per run.
+# reanchor_for_variant <[tsla_]baseline|reanchor|ss> -- the price-reanchoring flag state a
+# checkpoint was TRAINED with; simulating with a different state than training would evaluate the
+# model out-of-distribution on its own conditioning, so this is not an independent free choice.
 reanchor_for_variant () {
   case "$1" in
-    reanchor) echo "on" ;;
-    *)        echo "off" ;;
+    *reanchor*) echo "on" ;;
+    *)          echo "off" ;;
+  esac
+}
+
+# ticker_for_variant <[tsla_]baseline|reanchor|ss> -- which stock's data/checkpoints/days apply.
+ticker_for_variant () {
+  case "$1" in
+    tsla_*) echo "TSLA" ;;
+    *)      echo "INTC" ;;
   esac
 }

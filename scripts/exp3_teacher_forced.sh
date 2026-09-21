@@ -39,9 +39,10 @@ mkdir -p "$OUT_DIR"
 RA_TAG=$([[ "$REANCHOR" == "on" ]] && echo "reanchor" || echo "noreanchor")
 HAD_FLAG=0; [[ -f PRICE_REANCHOR_FLAG ]] && HAD_FLAG=1
 [[ "$REANCHOR" == "on" ]] && touch PRICE_REANCHOR_FLAG || rm -f PRICE_REANCHOR_FLAG
-echo "-- open-loop DDPM-100, ckpt=$CKPT_PATH, $RA_TAG"
+STOCK=$([[ -n "$VARIANT" ]] && ticker_for_variant "$VARIANT" || echo "INTC")
+echo "-- open-loop DDPM-100, stock=$STOCK, ckpt=$CKPT_PATH, $RA_TAG"
 python -u evaluation/diagnostics/open_loop_eval.py --type DDPM --nsteps 100 --ckpt-path "$CKPT_PATH" \
-    --split test --n-windows "$N_WINDOWS" --bucket-by-time \
+    --stock "$STOCK" --split test --n-windows "$N_WINDOWS" --bucket-by-time \
     --out "$OUT_DIR/open_loop_${RA_TAG}.json" \
     2>&1 | tee "$OUT_DIR/open_loop_${RA_TAG}.txt"
 [[ "$HAD_FLAG" == "1" ]] && touch PRICE_REANCHOR_FLAG || rm -f PRICE_REANCHOR_FLAG

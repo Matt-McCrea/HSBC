@@ -14,33 +14,37 @@
 # the one worth testing. A wall-clock --hours cap (default 5h) is a SAFETY NET only, in case
 # something hangs -- it should never actually bind if 2 epochs really take ~3h.
 #
-# THREE COMMANDS, ONE PER VARIANT:
-#   bash scripts/train_variant.sh baseline
-#   bash scripts/train_variant.sh reanchor
-#   bash scripts/train_variant.sh ss
-# (or just: bash scripts/train_three_variants.sh   -- runs all three back to back, unattended)
+# SIX COMMANDS (INTC + TSLA), ONE PER VARIANT -- "tsla_" prefix switches stock, same flag logic:
+#   bash scripts/train_variant.sh baseline        bash scripts/train_variant.sh tsla_baseline
+#   bash scripts/train_variant.sh reanchor         bash scripts/train_variant.sh tsla_reanchor
+#   bash scripts/train_variant.sh ss               bash scripts/train_variant.sh tsla_ss
+# (or just: bash scripts/train_three_variants.sh   -- runs the plain three back to back, unattended)
 set -uo pipefail
-VARIANT="${1:?usage: train_variant.sh <baseline|reanchor|ss> [hours]}"
+VARIANT="${1:?usage: train_variant.sh <[tsla_]baseline|reanchor|ss> [hours]}"
 HOURS="${2:-5}"
 CKPT_DIR="data/checkpoints/TRADES"
 DEST_DIR="data/checkpoints/TRADES_${VARIANT}"
 
 if pgrep -f "main.py" > /dev/null; then echo "!! training already running -- kill it first (single GPU)."; exit 1; fi
 
+STOCK="INTC"; BASE_VARIANT="$VARIANT"
+if [[ "$VARIANT" == tsla_* ]]; then STOCK="TSLA"; BASE_VARIANT="${VARIANT#tsla_}"; fi
+if [[ "$STOCK" == "TSLA" ]]; then echo "TSLA" > STOCK_OVERRIDE; else rm -f STOCK_OVERRIDE; fi
+
 # clean, deterministic flag state for THIS run -- never resume across variants (each is an
 # independent training run), never leave a stale flag from a previous invocation.
 rm -f RESUME_TRAINING_FLAG
 touch UNCLAMP_DEPTH_FLAG KEEP_EPOCH_CHECKPOINTS_FLAG
 echo "2" > MAX_EPOCHS_OVERRIDE
-case "$VARIANT" in
+case "$BASE_VARIANT" in
   baseline) rm -f PRICE_REANCHOR_FLAG SCHEDULED_SAMPLING_FLAG ;;
   reanchor) touch PRICE_REANCHOR_FLAG; rm -f SCHEDULED_SAMPLING_FLAG ;;
   ss)       rm -f PRICE_REANCHOR_FLAG; touch SCHEDULED_SAMPLING_FLAG ;;
-  *) echo "!! unknown variant: $VARIANT (want baseline|reanchor|ss)"; exit 1 ;;
+  *) echo "!! unknown variant: $VARIANT (want [tsla_]baseline|reanchor|ss)"; exit 1 ;;
 esac
 
 FLAGS=$(python3 -c "import constants as cst; print('UNCLAMP_DEPTH=%s PRICE_REANCHOR=%s SCHEDULED_SAMPLING=%s' % (cst.UNCLAMP_DEPTH, cst.PRICE_REANCHOR, cst.SCHEDULED_SAMPLING))")
-echo "== training variant: $VARIANT   $FLAGS   epochs=2 (safety cap ${HOURS}h)   $(date '+%F %T') =="
+echo "== training variant: $VARIANT   STOCK=$STOCK   $FLAGS   epochs=2 (safety cap ${HOURS}h)   $(date '+%F %T') =="
 mkdir -p "$DEST_DIR"
 BEFORE=$(ls "$CKPT_DIR"/*.ckpt 2>/dev/null | sort)
 

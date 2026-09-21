@@ -23,6 +23,7 @@ OUT_DIR="exp4_results/$(date +%Y%m%d_%H%M%S)"
 while [[ $# -gt 0 ]]; do case "$1" in
   --day) DAY="$2"; shift 2;; --seeds) SEEDS="$2"; shift 2;; --et) ET="$2"; shift 2;;
   --ckpt-dir) CKPT_DIR="$2"; shift 2;; --out-dir) OUT_DIR="$2"; shift 2;;
+  --ticker) TICKER="$2"; shift 2;;
   --include-decoys) INCLUDE_DECOYS=1; shift;;
   *) echo "unknown arg: $1" >&2; exit 1;; esac; done
 mkdir -p "$OUT_DIR/logs"; SUM="$OUT_DIR/summary.md"
@@ -61,7 +62,7 @@ REALP=$(ensure_real)
 
 run () {  # run <ckptfile> <seed>
   local CK="$1" S="$2"
-  local cname; cname=$(basename "$CK" .ckpt | sed -E 's/^val_ema=//; s/_INTC.*//')
+  local cname; cname=$(basename "$CK" .ckpt | sed -E 's/^val_ema=//; s/_(INTC|TSLA).*//')
   local TAG="${cname}__seed${S}"
   local DONE="$OUT_DIR/logs/.done_${TAG}"
   [[ -f "$DONE" ]] && { echo "SKIP $TAG"; return; }

@@ -100,11 +100,37 @@ simulated with it would be out-of-distribution, not a real "both ways" test). Th
 variant is trained with it on; `exp2_survival_sweep.sh --variant reanchor` and
 `exp3_teacher_forced.sh --variant reanchor` force the matching simulate-time state automatically.
 
+## 2026-09-21 — TSLA added: cross-stock generalization check
+
+`cst.Stocks.TSLA` already existed with precomputed normalization constants (`constants.py`,
+"for 15 days of TSLA") — the original TRADES paper covered both stocks, this fork just never
+wired TSLA through its own scripts. Closed that gap rather than treating it as a new feature:
+
+- `configuration.py`: `STOCK_OVERRIDE` file/env (same convention as `MAX_EPOCHS_OVERRIDE`) lets
+  `CHOSEN_STOCK` target TSLA without touching the hardcoded INTC default every other run relies on.
+- Variant naming extended with a `tsla_` prefix: `tsla_baseline`/`tsla_reanchor`/`tsla_ss` alongside
+  the existing `baseline`/`reanchor`/`ss` — same flag logic, `train_variant.sh` just also sets
+  `STOCK_OVERRIDE` and names the checkpoint directory `data/checkpoints/TRADES_tsla_<variant>/`.
+  `pin_trained_variant.sh`, `_ckpt_lib.sh` needed no changes (already generic over the variant
+  string); `exp2_survival_sweep.sh`/`exp3_teacher_forced.sh` pick up the right ticker/stock
+  automatically from the variant name.
+- `exp0_abides_replay_error.sh` gained `--ticker` + a fixed `message_csv_for` (was hardcoded to
+  INTC's specific millisecond file-name bounds, now globs — those bounds are LOBSTER's own
+  per-file values, not guaranteed identical across stocks).
+- `exp4_checkpoint_sweep.sh` gained `--ticker`.
+
+**Open unknowns, to resolve once TSLA data is actually placed:** the exact `data/TSLA/` directory
+name (convention: `data/TSLA/TSLA_<first-day>_<last-day>/`, per `README.md`'s data-format section)
+and which trading days are actually present (comment in `constants.py` suggests 15 days, not
+INTC's 20) — `exp2_survival_sweep.sh --variant tsla_baseline` refuses to run without an explicit
+`--days` for exactly this reason; `ls data/TSLA/*/` once placed gives the real list.
+
 ## Confirmed checkpoints
 
 **Written automatically by `bash scripts/pin_trained_variant.sh <variant>`**, called by
 `train_three_variants.sh` right after each training run — one `CKPT_PATH_<VARIANT>=` line per
-variant, below. `exp2`/`exp3` read the right one via `--variant baseline|reanchor|ss`. Do not
+variant, below (`CKPT_PATH_TSLA_BASELINE` etc. for the TSLA variants). `exp2`/`exp3` read the
+right one via `--variant baseline|reanchor|ss|tsla_baseline|tsla_reanchor|tsla_ss`. Do not
 hand-edit these lines — rerun `pin_trained_variant.sh` instead.
 
 *(empty until training finishes on the box that's actually running it)*
