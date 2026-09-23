@@ -69,6 +69,56 @@ for the closed-loop failures independent of exposure bias: over-aggressive order
 through the book faster than reality. Worth reporting regardless of how the (buggy, not yet fixed)
 early/late comparison turns out.
 
+## 2026-09-22/23 — TSLA wired up and trained; first cross-stock result is a genuine nuance, not a clean confirmation
+
+**Exp 0 for TSLA: same headline as INTC.** All 20 TSLA days x 7 lengths (140/140, no errors this
+time — the earlier batch failed instantly on every combo from a placeholder bug, see below)
+scored `one_sided_ever=False` throughout. `shares_missing` grows with session length on every day
+(mostly; two cells — 2015-01-07 and 2015-01-16 at 30min — read "flat", noise at that short a
+window) same as INTC. **Second-stock confirmation of the load-bearing Exp 0 finding**: ABIDES
+itself never produces the one-sided pathology on real flow, INTC or TSLA.
+
+**Exp 4, INTC baseline, second day (2015-01-16):** both checkpoints (epoch=0 val_ema=0.723,
+epoch=1 val_ema=0.702) failed again (0/2 survived). Two independent days now agree: not one
+unlucky checkpoint.
+
+**`tsla_baseline` trained**: epoch=1 val_ema=0.809 (pinned, the higher epoch per the existing
+selection rule), epoch=0 val_ema=0.838.
+
+**`tsla_baseline` survival checks — the first genuinely surprising cross-stock result:**
+
+| day | horizon | outcome |
+|---|---|---|
+| 2015-01-08 | 30min (smoke) | survived |
+| 2015-01-02 | 90min | **failed** |
+| 2015-01-07 | 90min | **failed** |
+| 2015-01-15 | 90min | **failed** |
+| 2015-01-22 | 90min | **failed** |
+| 2015-01-30 | 90min | **survived** |
+
+**2/6 survived (33%) at 90 minutes, vs INTC baseline's 0/11 (0%).** This is NOT the clean
+"instability generalizes identically" result — TSLA baseline is measurably more likely to survive
+a 90-minute window than INTC baseline, at least on this small sample. Don't overclaim from n=6,
+but don't paper over it either: this is exactly the kind of finding that makes the cross-stock
+angle valuable rather than a formality — either TSLA's liquidity/volatility profile is
+genuinely more forgiving for this model class, or day-to-day variance is just wider than INTC's
+and more TSLA days would narrow it back toward 0%. `tsla_reanchor` (next in the queue) will be the
+first real test of whether this TSLA-vs-INTC gap is a genuine stock effect or noise — if
+`tsla_reanchor` also survives more often than INTC's `reanchor`, that's a real pattern; if it
+reverts to ~0%, `tsla_baseline`'s two survivals were noise.
+
+**A real bug caught and fixed, twice, this round:**
+1. The first TSLA Exp 0 attempt failed on literally every one of 140 combos with `N: unbound
+   variable` — traced to a paste-back command that used a literal placeholder (`--max-mem-gb N`)
+   instead of a real number. Nothing was wasted (failed before touching ABIDES); reran clean.
+2. `session3_batch.sh`'s `teacher_forced_check` crashed with `V: unbound variable` immediately
+   after `tsla_baseline`'s survival checks finished, before Exp 3 could run. Root cause:
+   `local V="$1" OUT="...${V}..."` — bash expands every word on a `local` line (including `${V}`
+   in the second assignment) before any declaration takes effect, so `${V}` looked up a `V` that
+   didn't exist yet in that scope. Fixed by splitting into two `local` statements (matching the
+   pattern the script's other functions already used safely); grepped every other script in
+   `scripts/` for the same anti-pattern and confirmed this was the only instance.
+
 ## 2026-09-21 — Exp 0 finished (headline confirmed); Exp 4 surfaces a real non-determinism finding
 
 **Exp 0 completed** for all 20 INTC days, most at all 7 lengths (30/60/90/120/180/240/390 min) —
