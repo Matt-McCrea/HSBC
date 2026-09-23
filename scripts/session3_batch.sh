@@ -35,7 +35,8 @@ survival_check () {  # survival_check <variant> <day> <et>
 }
 
 teacher_forced_check () {  # teacher_forced_check <variant>
-  local V="$1" OUT="exp3_results/session3_${V}"
+  local V="$1"
+  local OUT="exp3_results/session3_${V}"
   if ls "$OUT"/open_loop_*.json >/dev/null 2>&1; then
     echo "SKIP exp3 $V -- already done"; return
   fi
