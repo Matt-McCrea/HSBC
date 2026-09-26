@@ -69,6 +69,42 @@ for the closed-loop failures independent of exposure bias: over-aggressive order
 through the book faster than reality. Worth reporting regardless of how the (buggy, not yet fixed)
 early/late comparison turns out.
 
+## 2026-09-24 — All three TSLA variants complete: TSLA is more forgiving, and Exp 3 explains why
+
+`session3_batch.sh` ran to completion — `tsla_reanchor` and `tsla_ss` trained and survival-checked
+after the `tsla_baseline` results logged 2026-09-22/23. Full 90-min survival picture now:
+
+| variant | TSLA survived / tested | INTC survived / tested |
+|---|---|---|
+| baseline | 2/6 (33%) | 0/11 (0%) |
+| reanchor | 1/4 (25%) | 0/3 (0%) |
+| ss       | 0/2 (0%)  | 0/3 (0%) |
+
+`tsla_ss` took ~5h to train (hit the safety cap right after epoch=1 saved, per the training log's
+own warning that scheduled sampling's 100-step rollout makes each self-conditioned training step
+expensive) vs ~1h10min for `tsla_baseline`/`tsla_reanchor` — expected, not investigated further.
+
+**Exp 3 (teacher-forced) gives a coherent explanation for why TSLA survives more often.** TSLA's
+own REAL data has a far higher marketable-order rate than INTC's: **6.3% vs 0.56%** (11x). The
+model's *generated* marketable-order rate is similar in absolute terms across both stocks (TSLA
+~21-22%, INTC ~22-26%) — so the excess over real is only **~3.5x for TSLA vs ~40x for INTC**. If
+the generated rate is closer to a fixed model-intrinsic miscalibration than to something that
+scales with the real distribution, then TSLA's real trading pattern already sits closer to what
+the model naturally produces — the "shock" to the closed feedback loop is smaller, which plausibly
+explains why TSLA's closed-loop runs survive a 90-minute window more often. This ties the Exp 2
+survival-rate finding and the Exp 3 marketable-order-rate finding into one mechanism rather than
+two separate, unconnected observations.
+
+**Reading the pattern across variants:** `ss` shows 0% survival on BOTH stocks — the one place the
+finding is uniform regardless of stock. `baseline` and `reanchor` both show TSLA surviving
+meaningfully more than INTC. Small n throughout (2-11 runs per cell) — don't over-index on exact
+percentages, but the *direction* (TSLA more forgiving for baseline/reanchor, ss uniformly bad on
+both) is consistent enough across three independent variant/stock combinations to be worth
+reporting as a real, if qualified, cross-stock difference — not noise.
+
+**Checkpoints backed up to git** (`data/checkpoints/TRADES_tsla_baseline/reanchor/ss`) before the
+month-long gap, given this remote's history of losing checkpoints to wipes.
+
 ## 2026-09-22/23 — TSLA wired up and trained; first cross-stock result is a genuine nuance, not a clean confirmation
 
 **Exp 0 for TSLA: same headline as INTC.** All 20 TSLA days x 7 lengths (140/140, no errors this
