@@ -1,0 +1,60 @@
+checkpoint: data/checkpoints/TRADES_baseline/val_ema=0.702_epoch=1_INTC_se_256_au_64_CD_8_seed_30.ckpt
+data      : data/INTC/test.npy
+[scheduled-sampling] ON  p_max=0.5 ramp_frac=0.4 rollout_steps=100 sampler=DDPM
+[scheduled-sampling] WARNING: rollout uses 100 sampler steps — this makes each self-conditioned training step expensive. Launch with DDIM + small DDIM_NSTEPS (~10).
+windows   : 4096 of 1871526 available (evenly spaced)
+[utils_data] Loaded normalization stats from data/INTC/normalization_stats.json
+  sampled 256/4096
+  sampled 512/4096
+  sampled 768/4096
+  sampled 1024/4096
+  sampled 1280/4096
+  sampled 1536/4096
+  sampled 1792/4096
+  sampled 2048/4096
+  sampled 2304/4096
+  sampled 2560/4096
+  sampled 2816/4096
+  sampled 3072/4096
+  sampled 3328/4096
+  sampled 3584/4096
+  sampled 3840/4096
+  sampled 4096/4096
+
+=== OPEN-LOOP RESULTS: DDPM_100_eta0.0 ===
+  REAL next-events       n=4096
+    type   limit=50.6% cancel=46.7% market=2.7%
+    depth  neg=0.6% 0=57.9% 1=16.9% 2=5.2% 3-5=10.6% 6+=8.9%
+    size   mean=358 std=664   time mean=0.0251s std=0.1108   buy=51.9%
+  DDPM_100_eta0.0 (L1 decode) n=4096
+    type   limit=51.9% cancel=39.8% market=8.3%
+    depth  neg=25.6% 0=12.2% 1=15.4% 2=14.4% 3-5=26.5% 6+=6.0%
+    size   mean=325 std=603   time mean=0.0274s std=0.1152   buy=49.1%
+  DDPM_100_eta0.0 (L2 decode) n=4096
+    type   limit=58.1% cancel=34.8% market=7.1%
+    depth  neg=25.6% 0=12.2% 1=15.4% 2=14.4% 3-5=26.5% 6+=6.0%
+    size   mean=325 std=603   time mean=0.0274s std=0.1152   buy=49.1%
+  DDPM_100_eta0.0 (prior decode) n=4096
+    type   limit=64.9% cancel=34.9% market=0.2%
+    depth  neg=25.6% 0=12.2% 1=15.4% 2=14.4% 3-5=26.5% 6+=6.0%
+    size   mean=325 std=603   time mean=0.0274s std=0.1152   buy=49.1%
+
+=== EARLY vs LATE SESSION (split at dataset index 935762 of 1871526) ===
+  REAL next-events (early) n=2048
+    type   limit=51.2% cancel=46.2% market=2.6%
+    depth  neg=0.6% 0=59.2% 1=17.4% 2=4.5% 3-5=9.2% 6+=8.9%
+    size   mean=335 std=603   time mean=0.0258s std=0.1076   buy=52.4%
+  DDPM_100_eta0.0 (early, prior decode) n=2048
+    type   limit=65.0% cancel=34.8% market=0.1%
+    depth  neg=25.3% 0=12.2% 1=15.3% 2=14.6% 3-5=26.5% 6+=6.1%
+    size   mean=331 std=587   time mean=0.0281s std=0.1154   buy=48.9%
+  REAL next-events (late) n=2048
+    type   limit=50.0% cancel=47.2% market=2.8%
+    depth  neg=0.5% 0=56.5% 1=16.3% 2=5.8% 3-5=12.0% 6+=8.9%
+    size   mean=381 std=719   time mean=0.0243s std=0.1140   buy=51.3%
+  DDPM_100_eta0.0 (late, prior decode) n=2048
+    type   limit=64.8% cancel=34.9% market=0.2%
+    depth  neg=25.8% 0=12.2% 1=15.4% 2=14.2% 3-5=26.6% 6+=5.9%
+    size   mean=320 std=619   time mean=0.0267s std=0.1150   buy=49.2%
+
+saved: exp3_results/fixed_baseline/open_loop_noreanchor.json

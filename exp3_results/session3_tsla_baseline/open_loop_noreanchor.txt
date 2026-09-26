@@ -1,0 +1,58 @@
+checkpoint: data/checkpoints/TRADES_tsla_baseline/val_ema=0.809_epoch=1_TSLA_se_256_au_64_CD_8_seed_30.ckpt
+data      : data/TSLA/test.npy
+windows   : 4096 of 618719 available (evenly spaced)
+[utils_data] Loaded normalization stats from data/TSLA/normalization_stats.json
+  sampled 256/4096
+  sampled 512/4096
+  sampled 768/4096
+  sampled 1024/4096
+  sampled 1280/4096
+  sampled 1536/4096
+  sampled 1792/4096
+  sampled 2048/4096
+  sampled 2304/4096
+  sampled 2560/4096
+  sampled 2816/4096
+  sampled 3072/4096
+  sampled 3328/4096
+  sampled 3584/4096
+  sampled 3840/4096
+  sampled 4096/4096
+
+=== OPEN-LOOP RESULTS: DDPM_100_eta0.0 ===
+  REAL next-events       n=4096
+    type   limit=49.2% cancel=49.0% market=1.8%
+    depth  neg=6.3% 0=14.3% 1=4.7% 2=4.0% 3-5=13.3% 6+=57.4%
+    size   mean=85 std=74   time mean=0.0763s std=0.2881   buy=53.3%
+  DDPM_100_eta0.0 (L1 decode) n=4096
+    type   limit=51.5% cancel=40.7% market=7.8%
+    depth  neg=21.4% 0=2.7% 1=3.6% 2=4.2% 3-5=10.7% 6+=57.5%
+    size   mean=88 std=92   time mean=0.0943s std=0.3624   buy=51.0%
+  DDPM_100_eta0.0 (L2 decode) n=4096
+    type   limit=57.6% cancel=35.4% market=7.0%
+    depth  neg=21.4% 0=2.7% 1=3.6% 2=4.2% 3-5=10.7% 6+=57.5%
+    size   mean=88 std=92   time mean=0.0943s std=0.3624   buy=51.0%
+  DDPM_100_eta0.0 (prior decode) n=4096
+    type   limit=64.6% cancel=35.3% market=0.1%
+    depth  neg=21.4% 0=2.7% 1=3.6% 2=4.2% 3-5=10.7% 6+=57.5%
+    size   mean=88 std=92   time mean=0.0943s std=0.3624   buy=51.0%
+
+=== EARLY vs LATE SESSION (split at dataset index 309358 of 618719) ===
+  REAL next-events (early) n=2048
+    type   limit=48.8% cancel=48.9% market=2.3%
+    depth  neg=6.1% 0=14.6% 1=4.8% 2=3.9% 3-5=11.9% 6+=58.7%
+    size   mean=85 std=71   time mean=0.0789s std=0.3018   buy=52.0%
+  DDPM_100_eta0.0 (early, prior decode) n=2048
+    type   limit=63.9% cancel=36.1% market=0.0%
+    depth  neg=21.2% 0=2.8% 1=3.7% 2=4.2% 3-5=11.2% 6+=56.7%
+    size   mean=87 std=92   time mean=0.0988s std=0.3659   buy=51.0%
+  REAL next-events (late) n=2048
+    type   limit=49.7% cancel=49.1% market=1.2%
+    depth  neg=6.5% 0=13.9% 1=4.6% 2=4.1% 3-5=14.6% 6+=56.2%
+    size   mean=85 std=76   time mean=0.0737s std=0.2737   buy=54.6%
+  DDPM_100_eta0.0 (late, prior decode) n=2048
+    type   limit=65.3% cancel=34.5% market=0.2%
+    depth  neg=21.5% 0=2.6% 1=3.5% 2=4.1% 3-5=10.1% 6+=58.2%
+    size   mean=89 std=91   time mean=0.0898s std=0.3589   buy=51.0%
+
+saved: exp3_results/session3_tsla_baseline/open_loop_noreanchor.json
