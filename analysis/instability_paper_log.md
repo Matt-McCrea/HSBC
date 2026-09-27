@@ -105,6 +105,26 @@ reporting as a real, if qualified, cross-stock difference — not noise.
 **Checkpoints backed up to git** (`data/checkpoints/TRADES_tsla_baseline/reanchor/ss`) before the
 month-long gap, given this remote's history of losing checkpoints to wipes.
 
+## 2026-09-26/27 — All checkpoints recovered after a silent .gitignore backup failure
+
+`backup_before_gap.sh`'s "successful" checkpoint backup commit (2026-09-26) actually contained
+**zero** checkpoints — `data/` is gitignored wholesale (deliberately, it also covers licensed
+LOBSTER data that must never be committed), so its plain `git add data/checkpoints/TRADES_...`
+silently skipped everything with only a warning, not an error. Not discovered until after the
+remote session was gone, at which point GitHub push auth was also broken on that box (a VS Code
+credential-relay socket that no longer existed), so the fix had to route around both problems:
+`git bundle` (commit history) + a manual `tar` of `.git/lfs/objects` (the actual checkpoint/CSV
+bytes, since bundles don't carry LFS content) transferred off the box by hand, merged and pushed
+from this machine instead. Took several rounds — one bundle attempt left orphaned partial files
+from an earlier failed LFS smudge, one LFS tarball transfer silently returned a stale cached copy
+twice before a renamed file forced a fresh one. All ten trained checkpoints (INTC and TSLA,
+baseline/reanchor/ss) are now confirmed on `origin/rl-execution` with real content verified
+(`file` reports `Zip archive data`, ~115M each, not LFS pointer stubs).
+
+**Fixed for good**: `backup_before_gap.sh` now uses `git add -f` (was plain `git add`) and checks
+on-disk-checkpoint-count vs staged-count before proceeding, refusing to continue if they disagree
+— the exact failure mode this incident hit.
+
 ## 2026-09-22/23 — TSLA wired up and trained; first cross-stock result is a genuine nuance, not a clean confirmation
 
 **Exp 0 for TSLA: same headline as INTC.** All 20 TSLA days x 7 lengths (140/140, no errors this
