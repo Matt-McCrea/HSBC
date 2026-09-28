@@ -127,13 +127,22 @@ INTC's 20) — `exp2_survival_sweep.sh --variant tsla_baseline` refuses to run w
 
 ## Confirmed checkpoints
 
-**Written automatically by `bash scripts/pin_trained_variant.sh <variant>`**, called by
-`train_three_variants.sh` right after each training run — one `CKPT_PATH_<VARIANT>=` line per
-variant, below (`CKPT_PATH_TSLA_BASELINE` etc. for the TSLA variants). `exp2`/`exp3` read the
-right one via `--variant baseline|reanchor|ss|tsla_baseline|tsla_reanchor|tsla_ss`. Do not
-hand-edit these lines — rerun `pin_trained_variant.sh` instead.
+**Normally written automatically by `bash scripts/pin_trained_variant.sh <variant>`** on the box
+that ran training — but that script only writes the local file, it never commits, and the
+backup-before-gap commit (2026-09-26/27) never staged `analysis/model_under_test.md` either. These
+six lines were therefore never actually captured in any commit — reconstructed here on 2026-09-28
+from the checkpoint filenames that *are* safely on `origin/rl-execution` (`git ls-tree -r
+origin/rl-execution -- data/checkpoints`) and cross-checked against every `pin_trained_variant.sh`
+paste-back in `analysis/instability_paper_log.md`. Same selection rule as that script: highest
+epoch available (`reanchor`/`ss` only ever produced one epoch each, so no choice there). `exp2`/
+`exp3` read the right one via `--variant baseline|reanchor|ss|tsla_baseline|tsla_reanchor|tsla_ss`.
 
-*(empty until training finishes on the box that's actually running it)*
+CKPT_PATH_BASELINE=data/checkpoints/TRADES_baseline/val_ema=0.702_epoch=1_INTC_se_256_au_64_CD_8_seed_30.ckpt
+CKPT_PATH_REANCHOR=data/checkpoints/TRADES_reanchor/val_ema=0.704_epoch=1_INTC_se_256_au_64_CD_8_seed_30.ckpt
+CKPT_PATH_SS=data/checkpoints/TRADES_ss/val_ema=0.757_epoch=0_INTC_se_256_au_64_CD_8_seed_30.ckpt
+CKPT_PATH_TSLA_BASELINE=data/checkpoints/TRADES_tsla_baseline/val_ema=0.809_epoch=1_TSLA_se_256_au_64_CD_8_seed_30.ckpt
+CKPT_PATH_TSLA_REANCHOR=data/checkpoints/TRADES_tsla_reanchor/val_ema=0.807_epoch=1_TSLA_se_256_au_64_CD_8_seed_30.ckpt
+CKPT_PATH_TSLA_SS=data/checkpoints/TRADES_tsla_ss/val_ema=0.824_epoch=1_TSLA_se_256_au_64_CD_8_seed_30.ckpt
 
 ---
 
